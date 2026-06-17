@@ -1,0 +1,49 @@
+# GenLayer Smart Contract Developer Rules
+
+Always follow these 8 strict rules when editing GenLayer smart contracts. Failure to comply will cause compiler/deployment failures in GenLayer Studio.
+
+## ⚠️ Rule 1: Strict Version Headers
+The first line of any contract file must be exactly:
+```python
+# v0.2.16
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+```
+
+## ⚠️ Rule 2: Do Not Reassign TreeMap / DynArray
+Never reassign `TreeMap` or `DynArray` in the contract constructor (`__init__`). They are auto-initialized by GenVM.
+*   **❌ Wrong:** `self.my_map = TreeMap()`
+*   **✅ Correct:** Just initialize primitives: `self.counter = u256(0)`
+
+## ⚠️ Rule 3: No floats in Public Signature Types
+Never use Python `float` in public method parameter types or return type annotations.
+*   **❌ Wrong:** `def submit(self, area: float):`
+*   **✅ Correct:** `def submit(self, area: int):` (multiply by scale factors like 10^4 for precision, e.g. 23.5 -> 235000)
+
+## ⚠️ Rule 4: Allowed Public Signature Parameter Types
+Only use these types: `str`, `bool`, `bytes`, `int`, sized ints (`u8`..`u256`, `i8`..`i256`), `Address`, `DynArray[T]`, `TreeMap[K, V]`.
+
+## ⚠️ Rule 5: State Storage Types
+All persistent fields stored as part of the contract state must use `TreeMap` or `DynArray` — never standard Python `dict` or `list`.
+
+## ⚠️ Rule 6: Class Declaration
+The entry-point contract class must always be named exactly `Contract` and inherit from `gl.Contract`:
+```python
+class Contract(gl.Contract):
+    ...
+```
+
+## ⚠️ Rule 7: Non-Deterministic Execution Consensus
+All non-deterministic calls (e.g. `gl.nondet.web.render`, `gl.nondet.exec_prompt`) MUST be run inside the leader function of `gl.vm.run_nondet_unsafe`:
+```python
+def leader():
+    return gl.nondet.exec_prompt("...")
+def validator(leader_result) -> bool:
+    return isinstance(leader_result, gl.vm.Return)
+result = gl.vm.run_nondet_unsafe(leader, validator)
+```
+
+## ⚠️ Rule 8: GenLayer Imports
+Never alias GenLayer imports (e.g. `import genlayer as gl`). Only use:
+```python
+from genlayer import *
+```
