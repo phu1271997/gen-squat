@@ -173,7 +173,7 @@ export const GenSquatProvider = ({ children }) => {
     return mode === 'DEMO' ? demoBalance : liveBalance;
   };
 
-  const submitClaim = async (polygon, startYear, endYear, description) => {
+  const submitClaim = async (polygon, startYear, endYear, description, landEvidenceUrl = '') => {
     if (mode === 'DEMO') {
       if (demoBalance < 5.0) {
         throw new Error("Insufficient GEN balance. Please use Faucet!");
@@ -189,6 +189,7 @@ export const GenSquatProvider = ({ children }) => {
         year_start: parseInt(startYear),
         year_end: parseInt(endYear),
         description,
+        land_evidence_url: landEvidenceUrl,
         status: "SUBMITTED",
         area_m2: Math.floor(500 + Math.random() * 800),
         created_at: Math.floor(Date.now() / 1000),
@@ -211,17 +212,22 @@ export const GenSquatProvider = ({ children }) => {
       const txHash = await client.writeContract({
         address: coreAddress,
         functionName: 'submit_claim',
-        args: [polygon, parseInt(startYear), parseInt(endYear), description],
+        args: [
+          polygon,
+          parseInt(startYear),
+          parseInt(endYear),
+          description,
+          landEvidenceUrl || 'https://gen-squat.vercel.app/samples/hcmc-land-record.html',
+        ],
         value: 5n * 10n**18n // 5 GEN in wei
       });
-      const receipt = await client.waitForTransactionReceipt({
+      await client.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.FINALIZED
       });
-      // Query claim count
       const latestCount = await client.readContract({
         address: coreAddress,
-        functionName: 'claim_count',
+        functionName: 'get_claim_count',
         args: []
       });
       return `claim_${latestCount}`;

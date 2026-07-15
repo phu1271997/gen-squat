@@ -25,6 +25,15 @@ class NFTInterface:
     class Write:
         def mint_sbt(self, owner: Address, claim_id: str, polygon_json: str, evidence_urls_json: str, ruling_hash: str, /) -> str: ...
 
+ZERO_ADDR = Address("0x0000000000000000000000000000000000000000")
+
+# Stake / fee constants (native GEN units, 18 decimals)
+STAKE_CLAIM = u256(5_000_000_000_000_000_000)       # 5 GEN
+STAKE_CLAIM_DISCOUNT = u256(4_000_000_000_000_000_000)  # 4 GEN (rep >= 5)
+STAKE_DISPUTE = u256(10_000_000_000_000_000_000)     # 10 GEN
+FEE_MINT = u256(2_000_000_000_000_000_000)           # 2 GEN
+
+
 class Contract(gl.Contract):
     # Core state variables
     claims: TreeMap[str, str]
@@ -32,8 +41,14 @@ class Contract(gl.Contract):
     disputes: TreeMap[str, str]
     dispute_rulings: TreeMap[str, str]
     claim_count: u256
+    # Standalone stake ledger (used when treasury_address is zero)
+    claim_stakes: TreeMap[str, u256]
+    dispute_stakes: TreeMap[str, u256]
+    withdrawable: TreeMap[Address, u256]
+    # SBT metadata stored on core when nft_address is zero (or mirrored)
+    boundary_nfts: TreeMap[str, str]
     
-    # Contract dependencies
+    # Contract dependencies (optional — zero address = standalone Studio mode)
     treasury_address: Address
     nft_address: Address
     
@@ -43,8 +58,22 @@ class Contract(gl.Contract):
 
     def __init__(self):
         self.claim_count = u256(0)
-        self.treasury_address = Address("0x0000000000000000000000000000000000000000")
-        self.nft_address = Address("0x0000000000000000000000000000000000000000")
+        self.treasury_address = ZERO_ADDR
+        self.nft_address = ZERO_ADDR
+
+    def _has_treasury(self) -> bool:
+        return self.treasury_address != ZERO_ADDR
+
+    def _has_nft(self) -> bool:
+        return self.nft_address != ZERO_ADDR
+
+    def _credit(self, who: Address, amount: u256) -> None:
+        if amount == u256(0):
+            return
+        cur = u256(0)
+        if who in self.withdrawable:
+            cur = self.withdrawable[who]
+        self.withdrawable[who] = cur + amount
 
     @gl.public.write
     def set_dependencies(self, treasury_address: Address, nft_address: Address) -> None:
@@ -127,7 +156,20 @@ class Contract(gl.Contract):
         return False
 
     @gl.public.write.payable
-    def submit_claim(self, polygon_json: str, year_start: int, year_end: int, description: str) -> str:
+    def submit_claim(
+        self,
+        polygon_json: str,
+        year_start: int,
+        year_end: int,
+        description: str,
+        land_evidence_url: str,
+    ) -> str:
+        """
+        Register a land boundary claim.
+        Payable: 5 GEN stake (4 GEN if reputation >= 5).
+        land_evidence_url: public http(s) page with parcel/record/photo notes
+        so validators can review concrete evidence via web.render.
+        """
         sender = gl.message.sender_address
         current_time = u256(self._parse_timestamp(gl.message_raw.get("datetime")))
         
@@ -138,6 +180,11 @@ class Contract(gl.Contract):
             
         if int(expiry) > int(current_time):
             raise ValueError("Sender is currently banned from submitting claims")
+
+        if len(description) == 0:
+            raise ValueError("description must not be empty")
+        if not land_evidence_url.startswith("http"):
+            raise ValueError("land_evidence_url must be a public http(s) URL with reviewable land evidence")
             
         # Parse and validate polygon
         try:
@@ -164,22 +211,23 @@ class Contract(gl.Contract):
         if year_start >= year_end:
             raise ValueError("Start year must be strictly less than end year")
         current_year = self._parse_year(gl.message_raw.get("datetime"))
-        if year_end > current_year:
-            raise ValueError(f"End year cannot be in the future (max {current_year})")
+        # Allow up to current calendar year + 0; clamp max for Studio clock skew
+        max_year = max(current_year, 2026)
+        if year_end > max_year:
+            raise ValueError(f"End year cannot be in the future (max {max_year})")
             
         # Staking validation (5 GEN required)
         stake = gl.message.value
-        # If user has good reputation (>= 5), give a 20% discount on stake
         reputation = i256(0)
         if sender in self.user_reputation:
             reputation = self.user_reputation[sender]
             
-        required_stake = u256(5_000_000_000_000_000_000) # 5 GEN
+        required_stake = STAKE_CLAIM
         if int(reputation) >= 5:
-            required_stake = u256(4_000_000_000_000_000_000) # 4 GEN
+            required_stake = STAKE_CLAIM_DISCOUNT
             
         if stake < required_stake:
-            raise ValueError(f"Insufficient stake provided. Required: {int(required_stake) / 10**18} GEN")
+            raise ValueError(f"Insufficient stake provided. Required: {int(required_stake) / 10**18} GEN (payable value)")
             
         # Centroid check for double-claim conflicts
         lat_sum = sum(coord[0] for coord in polygon)
@@ -206,14 +254,16 @@ class Contract(gl.Contract):
                     conflict_with_id = key
                     break
                     
-        # Lock stake in Treasury
         self.claim_count = u256(int(self.claim_count) + 1)
         claim_id = f"claim_{int(self.claim_count)}"
         
-        # Call Treasury
-        TreasuryInterface(self.treasury_address).emit(value=stake, on='finalized').deposit_claim_stake(sender, claim_id)
+        # Lock stake: Treasury if configured, else standalone ledger on this contract
+        if self._has_treasury():
+            TreasuryInterface(self.treasury_address).emit(value=stake, on='finalized').deposit_claim_stake(sender, claim_id)
+        else:
+            self.claim_stakes[claim_id] = stake
         
-        # Store claim
+        # Store claim (includes reviewable land evidence URL for judges / AI)
         claim_data = {
             "id": claim_id,
             "owner": str(sender),
@@ -221,11 +271,13 @@ class Contract(gl.Contract):
             "year_start": year_start,
             "year_end": year_end,
             "description": description,
+            "land_evidence_url": land_evidence_url,
             "status": "SUBMITTED",
             "created_at": int(current_time),
             "conflict_flag": conflict_flag,
             "conflict_with": conflict_with_id,
-            "area_m2": area_m2
+            "area_m2": area_m2,
+            "stake_wei": str(int(stake)),
         }
         
         self.claims[claim_id] = json.dumps(claim_data)
@@ -246,6 +298,8 @@ class Contract(gl.Contract):
         year_end = claim["year_end"]
         conflict_flag = claim["conflict_flag"]
         conflict_with_id = claim["conflict_with"]
+        land_evidence_url = claim.get("land_evidence_url", "")
+        description = claim.get("description", "")
         
         # Bounding box bounds
         min_lat = min(c[0] for c in polygon)
@@ -255,35 +309,57 @@ class Contract(gl.Contract):
         
         # Define nested consensus task
         def task_fn():
+            # Primary reviewable land record (public HTML sample or cadastral page)
+            land_page_text = ""
+            if land_evidence_url:
+                try:
+                    land_page_text = gl.nondet.web.render(land_evidence_url, mode="text")[:5000]
+                except Exception:
+                    land_page_text = "LAND_EVIDENCE_URL_UNREACHABLE"
+
             api_data = []
-            for year in range(year_start, year_end + 1):
+            # Cap year span to keep Studio consensus tractable (first, mid, last)
+            years = list(range(year_start, year_end + 1))
+            if len(years) > 3:
+                years = [years[0], years[len(years) // 2], years[-1]]
+            for year in years:
                 # 1. OpenStreetMap Overpass Attic Query
                 overpass_url = f"https://overpass-api.de/api/interpreter?data=[out:json][date:\"{year}-07-01T00:00:00Z\"];way({min_lat},{min_lng},{max_lat},{max_lng});out;"
-                osm_text = gl.nondet.web.render(overpass_url, mode="text")
+                try:
+                    osm_text = gl.nondet.web.render(overpass_url, mode="text")
+                except Exception:
+                    osm_text = "OSM_UNREACHABLE"
                 
                 # 2. Planetary Computer STAC Search
                 stac_url = f"https://planetarycomputer.microsoft.com/api/stac/v1/search?bbox={min_lng},{min_lat},{max_lng},{max_lat}&collections=sentinel-2-l2a&datetime={year}-01-01T00:00:00Z/{year}-12-31T23:59:59Z&limit=1"
-                stac_text = gl.nondet.web.render(stac_url, mode="text")
+                try:
+                    stac_text = gl.nondet.web.render(stac_url, mode="text")
+                except Exception:
+                    stac_text = "STAC_UNREACHABLE"
                 
                 api_data.append({
                     "year": year,
-                    "osm_data": osm_text[:2000],  # trim long outputs for context efficiency
-                    "stac_data": stac_text[:2000]
+                    "osm_data": osm_text[:1500],
+                    "stac_data": stac_text[:1500]
                 })
 
             system_prompt = (
                 "You are an on-chain AI geospatial forensics consensus node. Your task is to detect land encroachment "
-                "by analyzing historical spatial data.\n\n"
+                "by analyzing historical spatial data and a public land evidence record.\n\n"
                 "INPUT METADATA:\n"
+                f"- Claim description: {description}\n"
+                f"- Land evidence URL: {land_evidence_url}\n"
                 f"- Bounding Box: [{min_lng}, {min_lat}, {max_lng}, {max_lat}]\n"
                 f"- Target Polygon coordinates: {polygon}\n"
                 f"- Overlap conflict flag: {conflict_flag} (Conflict with: {conflict_with_id})\n\n"
+                "LAND EVIDENCE PAGE CONTENT:\n"
+                f"{land_page_text}\n\n"
                 "INSTRUCTIONS:\n"
-                "1. Study the OpenStreetMap Attic way records for each year. Look for structural elements (buildings, fences, barriers) appearing inside the polygon boundary.\n"
-                "2. Study the Planetary Computer STAC satellite item records. Look for cloud cover patterns, capture dates, and verify the existence of clean imagery assets.\n"
-                "3. Perform year-over-year temporal reasoning: if new roads, fences, or structures appear inside the polygon coordinates over time, classify it as encroachment.\n"
-                "4. Estimate the area lost in square meters based on building sizes/fences.\n"
-                "5. Provide a confidence score (0.0 to 1.0) and year-by-year status timeline.\n\n"
+                "1. Use the land evidence page as primary human-reviewable context (parcel id, area, fence notes, photos).\n"
+                "2. Study OSM Attic ways and STAC records for structural change over the year timeline.\n"
+                "3. If the land evidence page describes a fence shift / road widening inside the polygon, weight that heavily.\n"
+                "4. Estimate area lost in m²; provide confidence 0.0-1.0 and year-by-year timeline.\n"
+                "5. Always include land_evidence_url in evidence_urls.\n\n"
                 "OUTPUT FORMAT — STRICT JSON:\n"
                 "{\n"
                 "  \"encroachment_detected\": true/false,\n"
@@ -342,18 +418,25 @@ class Contract(gl.Contract):
         ruling = json.loads(ruling_json)
         confidence = float(ruling["confidence"])
         
-        # Refund owner 100% if confidence >= 0.7, else 50%
+        # Refund owner 100% if confidence >= 0.7, else 50% of the locked claim stake
         owner = Address(claim["owner"])
-        refund_amount = u256(5_000_000_000_000_000_000) if confidence >= 0.7 else u256(2_500_000_000_000_000_000)
+        locked = STAKE_CLAIM
+        if claim_id in self.claim_stakes:
+            locked = self.claim_stakes[claim_id]
+        refund_amount = locked if confidence >= 0.7 else (locked // u256(2))
         
-        # Call Treasury to resolve
-        TreasuryInterface(self.treasury_address).emit(on='finalized').resolve_claim(claim_id, owner, refund_amount)
+        if self._has_treasury():
+            TreasuryInterface(self.treasury_address).emit(on='finalized').resolve_claim(claim_id, owner, refund_amount)
+        else:
+            self._credit(owner, refund_amount)
+            self.claim_stakes[claim_id] = u256(0)
         
         claim["status"] = "RESOLVED"
         self.claims[claim_id] = json.dumps(claim)
 
     @gl.public.write.payable
     def dispute_claim(self, claim_id: str, challenge_reason: str) -> str:
+        """Payable: 10 GEN dispute stake. challenge_reason is free-text (not JSON)."""
         if claim_id not in self.claims:
             raise ValueError("Claim does not exist")
         claim_json = self.claims[claim_id]
@@ -361,19 +444,23 @@ class Contract(gl.Contract):
         claim = json.loads(claim_json)
         if claim["status"] != "ANALYZED":
             raise ValueError("Claim cannot be disputed (either resolved or not analyzed yet)")
+
+        if len(challenge_reason) == 0:
+            raise ValueError("challenge_reason must not be empty")
             
         sender = gl.message.sender_address
         stake = gl.message.value
-        # 10 GEN required for disputes
-        if stake < u256(10_000_000_000_000_000_000):
-            raise ValueError("Minimum dispute stake of 10 GEN is required")
+        if stake < STAKE_DISPUTE:
+            raise ValueError("Minimum dispute stake of 10 GEN is required (payable value)")
             
         dispute_key = f"dispute_{claim_id}_{sender}"
         if dispute_key in self.disputes:
             raise ValueError("You have already disputed this claim")
             
-        # Lock dispute stake in Treasury
-        TreasuryInterface(self.treasury_address).emit(value=stake, on='finalized').deposit_dispute_stake(sender, dispute_key)
+        if self._has_treasury():
+            TreasuryInterface(self.treasury_address).emit(value=stake, on='finalized').deposit_dispute_stake(sender, dispute_key)
+        else:
+            self.dispute_stakes[dispute_key] = stake
         
         # Save dispute entry
         dispute_entry = {
@@ -451,14 +538,29 @@ class Contract(gl.Contract):
         claim_owner = Address(claim["owner"])
         original_ruling = json.loads(ruling_json)
         original_conf = float(original_ruling["confidence"])
-        original_refund = u256(5_000_000_000_000_000_000) if original_conf >= 0.7 else u256(2_500_000_000_000_000_000)
+        locked_claim = STAKE_CLAIM
+        if claim_id in self.claim_stakes:
+            locked_claim = self.claim_stakes[claim_id]
+        original_refund = locked_claim if original_conf >= 0.7 else (locked_claim // u256(2))
         
         is_overturned = (verdict == "OVERTURN")
         
-        # Trigger Treasury payouts
-        TreasuryInterface(self.treasury_address).emit(on='finalized').resolve_dispute(
-            claim_id, dispute_key, sender, claim_owner, is_overturned, original_refund
-        )
+        if self._has_treasury():
+            TreasuryInterface(self.treasury_address).emit(on='finalized').resolve_dispute(
+                claim_id, dispute_key, sender, claim_owner, is_overturned, original_refund
+            )
+        else:
+            # Standalone stake split: overturn → challenger gets dispute stake + claim stake remainder;
+            # uphold → owner gets original_refund, dispute stake forfeited to surplus (stay in contract).
+            dispute_locked = STAKE_DISPUTE
+            if dispute_key in self.dispute_stakes:
+                dispute_locked = self.dispute_stakes[dispute_key]
+            if is_overturned:
+                self._credit(sender, dispute_locked + locked_claim)
+            else:
+                self._credit(claim_owner, original_refund)
+            self.claim_stakes[claim_id] = u256(0)
+            self.dispute_stakes[dispute_key] = u256(0)
         
         # Update reputations and ban status
         current_rep = i256(0)
@@ -486,17 +588,18 @@ class Contract(gl.Contract):
 
     @gl.public.write.payable
     def mint_boundary_nft(self, claim_id: str) -> str:
-        # Require 2 GEN mint fee
-        if gl.message.value < u256(2_000_000_000_000_000_000):
-            raise ValueError("Mint fee of 2 GEN is required")
+        """Payable: 2 GEN mint fee. Allowed after ANALYZED/RESOLVED* with confidence >= 0.8."""
+        if gl.message.value < FEE_MINT:
+            raise ValueError("Mint fee of 2 GEN is required (payable value)")
             
         if claim_id not in self.claims:
             raise ValueError("Claim does not exist")
         claim_json = self.claims[claim_id]
             
         claim = json.loads(claim_json)
-        if claim["status"] not in ["RESOLVED", "RESOLVED_UPHELD"]:
-            raise ValueError("NFT can only be minted for fully resolved, non-fraudulent claims")
+        allowed_status = ("ANALYZED", "RESOLVED", "RESOLVED_UPHELD", "RESOLVED_OVERTURNED")
+        if claim["status"] not in allowed_status:
+            raise ValueError("NFT can only be minted after analysis (or full resolution)")
             
         if claim_id not in self.claim_rulings:
             raise ValueError("Ruling does not exist for this claim")
@@ -504,26 +607,66 @@ class Contract(gl.Contract):
         ruling = json.loads(ruling_json)
         if float(ruling["confidence"]) < 0.8:
             raise ValueError(f"Ruling confidence ({ruling['confidence']}) must be >= 0.8 to mint NFT")
+
+        if claim_id in self.boundary_nfts and self.boundary_nfts[claim_id] != "":
+            raise ValueError("Boundary NFT already minted for this claim")
             
         # Hash ruling to serve as proof
         import hashlib
         ruling_hash = hashlib.sha256(ruling_json.encode("utf-8")).hexdigest()
+
+        evidence_urls = ruling.get("evidence_urls", [])
+        land_url = claim.get("land_evidence_url", "")
+        if land_url and land_url not in evidence_urls:
+            evidence_urls = [land_url] + list(evidence_urls)
+
+        token_id = f"sbt_{claim_id}"
+        metadata = {
+            "token_id": token_id,
+            "owner": claim["owner"],
+            "claim_id": claim_id,
+            "polygon": claim["polygon"],
+            "land_evidence_url": land_url,
+            "evidence_urls": evidence_urls,
+            "ruling_hash": ruling_hash,
+            "confidence": ruling.get("confidence"),
+            "encroachment_detected": ruling.get("encroachment_detected"),
+        }
+        metadata_str = json.dumps(metadata, sort_keys=True)
+        self.boundary_nfts[claim_id] = metadata_str
         
-        # Forward mint fee to Treasury surplus
-        TreasuryInterface(self.treasury_address).emit(value=gl.message.value, on='finalized').deposit_mint_fee()
-        
-        # Trigger NFT Contract minting
-        NFTInterface(self.nft_address).emit(on='finalized').mint_sbt(
-            Address(claim["owner"]),
-            claim_id,
-            json.dumps(claim["polygon"]),
-            json.dumps(ruling.get("evidence_urls", [])),
-            ruling_hash
-        )
+        if self._has_treasury():
+            TreasuryInterface(self.treasury_address).emit(value=gl.message.value, on='finalized').deposit_mint_fee()
+        # else mint fee stays in contract (protocol fee)
+
+        if self._has_nft():
+            NFTInterface(self.nft_address).emit(on='finalized').mint_sbt(
+                Address(claim["owner"]),
+                claim_id,
+                json.dumps(claim["polygon"]),
+                json.dumps(evidence_urls),
+                ruling_hash
+            )
         
         return ruling_hash
 
+    @gl.public.write
+    def withdraw(self) -> None:
+        """Pull-payment of standalone refunds/credits (when treasury is not configured)."""
+        sender = gl.message.sender_address
+        amount = u256(0)
+        if sender in self.withdrawable:
+            amount = self.withdrawable[sender]
+        if amount == u256(0):
+            raise ValueError("Nothing to withdraw")
+        self.withdrawable[sender] = u256(0)
+        gl.get_contract_at(sender).emit_transfer(value=amount)
+
     # View Getters
+    @gl.public.view
+    def get_claim_count(self) -> u256:
+        return self.claim_count
+
     @gl.public.view
     def get_claim(self, claim_id: str) -> str:
         if claim_id not in self.claims:
@@ -549,6 +692,18 @@ class Contract(gl.Contract):
         return self.dispute_rulings[dispute_key]
 
     @gl.public.view
+    def get_boundary_nft(self, claim_id: str) -> str:
+        if claim_id not in self.boundary_nfts or self.boundary_nfts[claim_id] == "":
+            raise ValueError("Boundary NFT does not exist for this claim")
+        return self.boundary_nfts[claim_id]
+
+    @gl.public.view
+    def get_withdrawable(self, who: Address) -> u256:
+        if who in self.withdrawable:
+            return self.withdrawable[who]
+        return u256(0)
+
+    @gl.public.view
     def get_user_stats(self, user: Address) -> str:
         reputation = i256(0)
         if user in self.user_reputation:
@@ -563,3 +718,35 @@ class Contract(gl.Contract):
             "ban_expiry": int(expiry)
         }
         return json.dumps(stats)
+
+    @gl.public.view
+    def get_contract_info(self) -> str:
+        return json.dumps({
+            "name": "GenSquat Core",
+            "source": "contracts/gen_squat_core.py",
+            "payable": {
+                "submit_claim": "5 GEN",
+                "dispute_claim": "10 GEN",
+                "mint_boundary_nft": "2 GEN",
+            },
+            "methods": [
+                "submit_claim",
+                "analyze_claim",
+                "claim_refund",
+                "dispute_claim",
+                "mint_boundary_nft",
+                "withdraw",
+                "get_claim",
+                "get_ruling",
+                "get_claim_count",
+                "get_boundary_nft",
+                "get_contract_info",
+            ],
+            "workflow": [
+                "submit_claim(+5 GEN, polygon + land_evidence_url)",
+                "analyze_claim (AI jury reads land evidence + OSM/STAC)",
+                "dispute_claim(+10 GEN) optional",
+                "mint_boundary_nft(+2 GEN) if confidence >= 0.8",
+            ],
+            "standalone_mode": "treasury/nft zero-address OK for Studio demos",
+        })

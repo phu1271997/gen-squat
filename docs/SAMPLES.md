@@ -1,20 +1,30 @@
-# Pre-Seeded Sample Claims Guide
+# Sample disputes with reviewable land evidence
 
-To make the Builder Program evaluation seamless, GenSquat v2 comes with three pre-seeded dispute scenarios. These demonstrate various paths in the contract's logic (encroachment detected, clean boundary, and overturned dispute arbitration).
+Judges need **concrete land inputs** the contract can analyze. GenSquat hosts
+public HTML parcel pages under `/samples/` on the live app. The UI presets fill
+`land_evidence_url` automatically; `analyze_claim` calls `web.render` on that URL.
+
+| Case | Sample page | Polygon | Path |
+|---|---|---|---|
+| HCMC encroachment | Parcel D2-4418 | District 2 residential | `/samples/hcmc-land-record.html` |
+| Hanoi clean | Parcel HK-902 | Hoan Kiem commercial | `/samples/hanoi-land-record.html` |
+| Dak Lak dispute | Parcel DL-77 | Coffee farm road | `/samples/daklak-land-record.html` |
+
+**Payable reminder:** submit **5 GEN**, dispute **10 GEN**, mint **2 GEN**.
 
 ---
 
 ## Case 1: District 2 HCMC Encroachment (Encroachment Detected)
 
 ### Metadata
-- **Claim ID:** `demo_hcmc` (on-chain equivalent: `claim_1`)
-- **Owner Address:** `0x2bd806c97F0e00aF1a1fC3328fA763a9269723C8`
+- **Evidence URL:** `https://gen-squat.vercel.app/samples/hcmc-land-record.html`
+- **Claim ID (on-chain):** `claim_N` after live `submit_claim`
 - **Polygon Bounds:** `[[10.7769, 106.7009], [10.7775, 106.7009], [10.7775, 106.7015], [10.7769, 106.7015]]`
 - **Year Range:** 2015 — 2025
 - **Area:** 660 m²
 
 ### Context
-A residential property in HCMC. The neighbor rebuilt a concrete boundary wall in 2021. The claimant alleges the new fence shifts 1.8 meters eastwards, encroaching into their land.
+A residential property in HCMC. The neighbor rebuilt a concrete boundary wall in 2021. The claimant alleges the new fence shifts 1.8 meters eastwards, encroaching into their land. The public evidence page includes parcel id, survey notes, and photo log text.
 
 ### Consensus Verdict
 - **Verdict:** Encroachment Detected

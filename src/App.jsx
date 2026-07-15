@@ -16,31 +16,53 @@ import {
   Check,
   Settings
 } from 'lucide-react';
-import { client, CONTRACT_ADDRESS as INITIAL_CONTRACT_ADDRESS, account, privateKey } from './genlayerClient';
+import {
+  client,
+  CONTRACT_ADDRESS as INITIAL_CONTRACT_ADDRESS,
+  account,
+  privateKey,
+  PAYABLE,
+  config,
+  healthCheck,
+  requireContract,
+  EXPECTED_METHODS,
+} from './genlayerClient';
 import { TransactionStatus } from 'genlayer-js/types';
 
-// Preset Coordinate templates
+// Sample land evidence pages are hosted on the public live app under /samples/
+// so the Intelligent Contract can web.render concrete parcel records.
+const sampleEvidence = (slug) => {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/samples/${slug}`;
+  }
+  return `https://gen-squat.vercel.app/samples/${slug}`;
+};
+
+// Preset Coordinate templates with reviewable land evidence URLs
 const COORD_TEMPLATES = {
   HCMC: {
     name: "Ho Chi Minh City (Encroachment)",
     polygon: '[[10.7769, 106.7009], [10.7775, 106.7009], [10.7775, 106.7015], [10.7769, 106.7015]]',
     yearStart: 2015,
     yearEnd: 2025,
-    description: "My family's residential plot in District 2, HCMC. Neighbor has rebuilt their fence over the years, seemingly pushing eastwards into my property boundary."
+    description: "My family's residential plot in District 2, HCMC. Neighbor has rebuilt their fence over the years, seemingly pushing eastwards into my property boundary.",
+    landEvidenceUrl: sampleEvidence('hcmc-land-record.html'),
   },
   HANOI: {
     name: "Hanoi Capital (Clean)",
     polygon: '[[21.0285, 105.8542], [21.0295, 105.8542], [21.0295, 105.8552], [21.0285, 105.8552]]',
     yearStart: 2018,
     yearEnd: 2024,
-    description: "A commercial plot located in Hoan Kiem District. Seeking official boundary verification before starting design phases for a commercial storefront."
+    description: "A commercial plot located in Hoan Kiem District. Seeking official boundary verification before starting design phases for a commercial storefront.",
+    landEvidenceUrl: sampleEvidence('hanoi-land-record.html'),
   },
   DAKLAK: {
     name: "Dak Lak Farm (Agricultural)",
     polygon: '[[12.6712, 108.0382], [12.6722, 108.0382], [12.6722, 108.0392], [12.6712, 108.0392]]',
     yearStart: 2016,
     yearEnd: 2025,
-    description: "Agricultural coffee farm boundary. Suspect neighboring plantation has cleared trees and expanded road lanes inside our eastern boundary coordinates."
+    description: "Agricultural coffee farm boundary. Suspect neighboring plantation has cleared trees and expanded road lanes inside our eastern boundary coordinates.",
+    landEvidenceUrl: sampleEvidence('daklak-land-record.html'),
   }
 };
 
@@ -58,6 +80,7 @@ function App() {
   const [yearStart, setYearStart] = useState(COORD_TEMPLATES.HCMC.yearStart);
   const [yearEnd, setYearEnd] = useState(COORD_TEMPLATES.HCMC.yearEnd);
   const [description, setDescription] = useState(COORD_TEMPLATES.HCMC.description);
+  const [landEvidenceUrl, setLandEvidenceUrl] = useState(COORD_TEMPLATES.HCMC.landEvidenceUrl);
   const [challengeReason, setChallengeReason] = useState('');
 
   // Lookup & Operations
@@ -67,15 +90,22 @@ function App() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [progress, setProgress] = useState('');
+  const [health, setHealth] = useState('Checking GenLayer binding…');
+  const [healthOk, setHealthOk] = useState(null);
 
   // Results
   const [claimData, setClaimData] = useState(null);
   const [rulingData, setRulingData] = useState(null);
   const [nftData, setNftData] = useState(null);
 
-  // Load HCMC preset initially
+  // Load HCMC preset initially + health probe
   useEffect(() => {
     handleSelectPreset('HCMC');
+    healthCheck(contractAddress).then((r) => {
+      setHealthOk(r.ok);
+      setHealth(r.message);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSelectPreset = (key) => {
@@ -84,8 +114,11 @@ function App() {
     setYearStart(p.yearStart);
     setYearEnd(p.yearEnd);
     setDescription(p.description);
-    setSuccess(`Loaded preset: ${p.name}`);
+    setLandEvidenceUrl(sampleEvidence(key === 'HCMC' ? 'hcmc-land-record.html' : key === 'HANOI' ? 'hanoi-land-record.html' : 'daklak-land-record.html'));
+    setSuccess(`Loaded sample dispute: ${p.name} (includes reviewable land evidence URL)`);
   };
+
+  const activeContract = () => requireContract(contractAddress);
 
   const copyToClipboard = (text, setCopied) => {
     navigator.clipboard.writeText(text);
@@ -93,17 +126,28 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Submit Claim Flow
+  // Submit Claim Flow (payable 5 GEN + land evidence URL)
   const handleSubmitClaim = async () => {
     setLoading(true);
     setError('');
     setSuccess('');
     setProgress('INITIATING_TX');
     try {
+      const addr = activeContract();
+      if (!landEvidenceUrl?.startsWith('http')) {
+        throw new Error('land_evidence_url must be a public http(s) page with parcel / photo / cadastral notes.');
+      }
       const txHash = await client.writeContract({
-        address: contractAddress,
+        address: addr,
         functionName: 'submit_claim',
-        args: [polygonJson, parseInt(yearStart), parseInt(yearEnd), description],
+        args: [
+          polygonJson,
+          parseInt(yearStart, 10),
+          parseInt(yearEnd, 10),
+          description,
+          landEvidenceUrl,
+        ],
+        value: PAYABLE.submitClaim,
       });
       
       setProgress('SUBMITTING');
@@ -114,16 +158,19 @@ function App() {
       
       setProgress('FETCHING_COUNTER');
       const latestCount = await client.readContract({
-        address: contractAddress,
-        functionName: 'claim_count',
+        address: addr,
+        functionName: 'get_claim_count',
         args: []
       });
       
       const newClaimId = `claim_${latestCount}`;
       setClaimId(newClaimId);
-      setSuccess(`Claim successfully submitted! Assigned ID: ${newClaimId}`);
+      setSuccess(`Claim submitted with 5 GEN stake. ID: ${newClaimId}. Evidence: ${landEvidenceUrl}`);
       setProgress('');
       await fetchClaimDetails(newClaimId);
+      const h = await healthCheck(addr);
+      setHealthOk(h.ok);
+      setHealth(h.message);
     } catch (e) {
       console.error(e);
       setError(`Claim submission failed: ${e.message || e}`);
@@ -141,10 +188,12 @@ function App() {
     setSuccess('');
     setProgress('PENDING');
     try {
+      const addr = activeContract();
       const txHash = await client.writeContract({
-        address: contractAddress,
+        address: addr,
         functionName: 'analyze_claim',
         args: [claimId],
+        value: 0n,
       });
       
       // Poll consensus state change dynamically
@@ -176,7 +225,7 @@ function App() {
     }
   };
 
-  // Dispute Claim Flow
+  // Dispute Claim Flow (payable 10 GEN; challenge_reason is plain text)
   const handleDisputeClaim = async () => {
     if (!claimId || !challengeReason) return;
     setLoading(true);
@@ -184,16 +233,12 @@ function App() {
     setSuccess('');
     setProgress('PENDING');
     try {
-      const challengeObj = {
-        challenger: account.address,
-        reason: challengeReason,
-        evidence_url: `https://earthengine.google.com/timelapse/#v=dispute_${claimId}`
-      };
-      
+      const addr = activeContract();
       const txHash = await client.writeContract({
-        address: contractAddress,
+        address: addr,
         functionName: 'dispute_claim',
-        args: [claimId, JSON.stringify(challengeObj)],
+        args: [claimId, challengeReason],
+        value: PAYABLE.disputeClaim,
       });
       
       const interval = setInterval(async () => {
@@ -210,7 +255,7 @@ function App() {
       
       clearInterval(interval);
       setProgress('FINALIZED');
-      setSuccess(`Dispute arbitration finalized on-chain!`);
+      setSuccess(`Dispute arbitration finalized on-chain (10 GEN stake)!`);
       setProgress('');
       setChallengeReason('');
       await fetchClaimDetails(claimId);
@@ -223,7 +268,7 @@ function App() {
     }
   };
 
-  // Mint Soulbound Boundary Proof NFT
+  // Mint Soulbound Boundary Proof NFT (payable 2 GEN)
   const handleMintNft = async () => {
     if (!claimId) return;
     setLoading(true);
@@ -231,10 +276,12 @@ function App() {
     setSuccess('');
     setProgress('MINTING');
     try {
+      const addr = activeContract();
       const txHash = await client.writeContract({
-        address: contractAddress,
+        address: addr,
         functionName: 'mint_boundary_nft',
         args: [claimId],
+        value: PAYABLE.mintNft,
       });
       
       await client.waitForTransactionReceipt({
@@ -242,7 +289,7 @@ function App() {
         status: TransactionStatus.FINALIZED,
       });
       
-      setSuccess(`Soulbound Boundary Proof NFT minted successfully!`);
+      setSuccess(`Soulbound Boundary Proof NFT minted (2 GEN fee)!`);
       setProgress('');
       await fetchClaimDetails(claimId);
     } catch (e) {
@@ -264,19 +311,18 @@ function App() {
     setRulingData(null);
     setNftData(null);
     try {
-      // Read Claim
+      const addr = activeContract();
       const claimStr = await client.readContract({
-        address: contractAddress,
+        address: addr,
         functionName: 'get_claim',
         args: [id],
       });
       const parsedClaim = JSON.parse(claimStr);
       setClaimData(parsedClaim);
       
-      // Try to read ruling
       try {
         const rulingStr = await client.readContract({
-          address: contractAddress,
+          address: addr,
           functionName: 'get_ruling',
           args: [id],
         });
@@ -286,10 +332,9 @@ function App() {
         // No ruling exists yet
       }
 
-      // Try to read NFT
       try {
         const nftStr = await client.readContract({
-          address: contractAddress,
+          address: addr,
           functionName: 'get_boundary_nft',
           args: [id],
         });
@@ -300,7 +345,7 @@ function App() {
       }
     } catch (e) {
       console.error(e);
-      setError(`Lookup failed: The claim ID "${id}" could not be found.`);
+      setError(`Lookup failed: The claim ID "${id}" could not be found on the configured GenLayer contract.`);
     } finally {
       setFetching(false);
     }
@@ -384,18 +429,51 @@ function App() {
         </div>
       </header>
 
+      {/* Deployment evidence — judge-facing */}
+      <div className="glass-card" style={{ textAlign: 'left', marginBottom: '20px', border: '1px solid rgba(99,102,241,0.35)' }}>
+        <h3 style={{ margin: '0 0 10px 0', fontSize: '15px' }}>Deployment evidence · GenLayer binding</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '6px 12px', fontSize: 13, fontFamily: 'ui-monospace, monospace' }}>
+          <span style={{ opacity: 0.7 }}>Contract</span>
+          <span style={{ wordBreak: 'break-all' }}>{config.isConfigured || contractAddress ? (contractAddress || config.contractAddress) : 'NOT SET — set VITE_CONTRACT_ADDRESS'}</span>
+          <span style={{ opacity: 0.7 }}>Network / RPC</span>
+          <span style={{ wordBreak: 'break-all' }}>{config.networkLabel} · {config.rpcUrl}</span>
+          <span style={{ opacity: 0.7 }}>Source</span>
+          <span>{config.sourcePath}</span>
+          <span style={{ opacity: 0.7 }}>Payable</span>
+          <span>submit_claim 5 GEN · dispute_claim 10 GEN · mint_boundary_nft 2 GEN</span>
+          <span style={{ opacity: 0.7 }}>Methods</span>
+          <span style={{ wordBreak: 'break-all' }}>{EXPECTED_METHODS.join(', ')}</span>
+          <span style={{ opacity: 0.7 }}>Sample evidence</span>
+          <span>
+            <a href={sampleEvidence('hcmc-land-record.html')} target="_blank" rel="noreferrer">HCMC parcel</a>
+            {' · '}
+            <a href={sampleEvidence('hanoi-land-record.html')} target="_blank" rel="noreferrer">Hanoi parcel</a>
+            {' · '}
+            <a href={sampleEvidence('daklak-land-record.html')} target="_blank" rel="noreferrer">Dak Lak farm</a>
+          </span>
+        </div>
+        <p style={{ margin: '12px 0 0', fontSize: 13, color: healthOk === true ? '#34d399' : healthOk === false ? '#f87171' : '#9ca3af', fontFamily: 'ui-monospace, monospace' }}>
+          {healthOk === true ? '✓ ' : healthOk === false ? '✗ ' : '… '}
+          {health}
+        </p>
+        <p style={{ margin: '8px 0 0', fontSize: 12, opacity: 0.75 }}>
+          E2E path: load HCMC sample → Submit (5 GEN) → Analyze → Dispute optional (10 GEN) → Mint (2 GEN, confidence ≥ 0.8).
+        </p>
+      </div>
+
       {/* Network Configuration dropdown */}
       {showConfig && (
         <div className="glass-card" style={{ textAlign: 'left', marginTop: '-20px', marginBottom: '24px', border: '1px solid var(--color-primary)' }}>
           <h3 style={{ margin: '0 0 12px 0', fontSize: '15px' }}>Developer Settings</h3>
           <div className="form-group">
-            <label className="form-label">Active Intelligent Contract Address</label>
+            <label className="form-label">Active Intelligent Contract Address (gen_squat_core)</label>
             <div style={{ display: 'flex', gap: '8px' }}>
               <input 
                 type="text" 
                 className="text-input" 
-                value={contractAddress}
+                value={contractAddress || ''}
                 onChange={(e) => setContractAddress(e.target.value)}
+                placeholder="0x… from Studio deploy of contracts/gen_squat_core.py"
               />
               <button 
                 className="copy-btn" 
@@ -540,6 +618,20 @@ function App() {
                   />
                 </div>
 
+                <div className="form-group">
+                  <label className="form-label">Land evidence URL (public, reviewable)</label>
+                  <input
+                    type="url"
+                    className="text-input"
+                    value={landEvidenceUrl}
+                    onChange={(e) => setLandEvidenceUrl(e.target.value)}
+                    placeholder="https://…/samples/hcmc-land-record.html"
+                  />
+                  <span style={{ fontSize: 11, opacity: 0.7, display: 'block', marginTop: 4 }}>
+                    Required. Contract reads this page on-chain via web.render. Presets load hosted sample parcel records.
+                  </span>
+                </div>
+
                 <div className="form-row">
                   <div className="form-group">
                     <label className="form-label">Start Year</label>
@@ -578,7 +670,7 @@ function App() {
                   disabled={loading}
                 >
                   {loading ? <RotateCw className="spinner" size={16} /> : <CheckCircle size={16} />}
-                  Submit Claim to GenLayer
+                  Submit Claim (payable 5 GEN)
                 </button>
               </div>
             )}
@@ -655,7 +747,7 @@ function App() {
                   disabled={loading || !claimId || !challengeReason}
                 >
                   {loading ? <RotateCw className="spinner" size={16} /> : <AlertTriangle size={16} />}
-                  Submit Dispute Challenge
+                  Submit Dispute (payable 10 GEN)
                 </button>
               </div>
             )}
@@ -879,15 +971,15 @@ function App() {
                           <button 
                             className="btn-primary" 
                             style={{ background: 'linear-gradient(135deg, var(--color-purple) 0%, #a855f7 100%)' }}
-                            disabled={loading || rulingData.confidence < 0.8}
+                            disabled={loading || Number(rulingData.confidence) < 0.8}
                             onClick={handleMintNft}
                           >
                             <Shield size={16} />
-                            Mint Boundary SBT (Requires Confidence &ge; 80%)
+                            Mint Boundary SBT (payable 2 GEN, confidence ≥ 80%)
                           </button>
-                          {rulingData.confidence < 0.8 && (
+                          {Number(rulingData.confidence) < 0.8 && (
                             <span style={{ fontSize: '11px', color: 'var(--color-danger)', marginTop: '6px', display: 'block' }}>
-                              * Ruling confidence is too low to mint boundary proof ({ (rulingData.confidence * 100).toFixed(0) }% &lt; 80%). You can file a dispute challenge above to re-evaluate.
+                              * Ruling confidence is too low to mint boundary proof ({ (Number(rulingData.confidence) * 100).toFixed(0) }% &lt; 80%). You can file a dispute challenge above to re-evaluate.
                             </span>
                           )}
                         </div>
