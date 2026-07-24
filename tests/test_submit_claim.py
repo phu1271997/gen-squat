@@ -112,18 +112,19 @@ def test_submit_claim_validation(direct_vm, direct_deploy, direct_alice, direct_
     # Valid HCMC boundary coordinates (approx 600m2)
     valid_polygon = [[10.7769, 106.7009], [10.7775, 106.7009], [10.7775, 106.7015], [10.7769, 106.7015]]
     valid_polygon_json = json.dumps(valid_polygon)
-    
+    land_url = "https://gen-squat.vercel.app/samples/hcmc-land-record.html"
+
     # Set block metadata (time and year)
     direct_vm.warp("2023-11-15T00:00:00+00:00")
-    
+
     # Check that submitting without enough value fails
     with direct_vm.expect_revert("Insufficient stake provided"):
         direct_vm.value = 1_000_000_000_000_000_000 # 1 GEN (insufficient)
-        core.submit_claim(valid_polygon_json, 2018, 2022, "My residential plot")
-        
+        core.submit_claim(valid_polygon_json, 2018, 2022, "My residential plot", land_url)
+
     # Check successful submission with 5 GEN
     direct_vm.value = 5_000_000_000_000_000_000 # 5 GEN
-    claim_id = core.submit_claim(valid_polygon_json, 2018, 2022, "My residential plot")
+    claim_id = core.submit_claim(valid_polygon_json, 2018, 2022, "My residential plot", land_url)
     assert claim_id == "claim_1"
     
     # Verify claim storage state
@@ -144,25 +145,30 @@ def test_submit_claim_validation(direct_vm, direct_deploy, direct_alice, direct_
     intersecting_polygon = [[10.0, 10.0], [11.0, 11.0], [10.0, 11.0], [11.0, 10.0]]
     with direct_vm.expect_revert("Polygon boundaries must not self-intersect"):
         direct_vm.value = 5_000_000_000_000_000_000
-        core.submit_claim(json.dumps(intersecting_polygon), 2018, 2022, "Self-intersecting")
-        
+        core.submit_claim(json.dumps(intersecting_polygon), 2018, 2022, "Self-intersecting", land_url)
+
     # Check area maximum limits validator
     huge_polygon = [[10.0, 10.0], [11.0, 10.0], [11.0, 11.0], [10.0, 11.0]] # ~12,000 km2
     with direct_vm.expect_revert("Polygon area"):
         direct_vm.value = 5_000_000_000_000_000_000
-        core.submit_claim(json.dumps(huge_polygon), 2018, 2022, "Too huge")
-        
+        core.submit_claim(json.dumps(huge_polygon), 2018, 2022, "Too huge", land_url)
+
     # Check area minimum limits validator
     tiny_polygon = [[10.7769, 106.7009], [10.776901, 106.7009], [10.776901, 106.700901], [10.7769, 106.700901]] # tiny
     with direct_vm.expect_revert("Polygon area"):
         direct_vm.value = 5_000_000_000_000_000_000
-        core.submit_claim(json.dumps(tiny_polygon), 2018, 2022, "Too tiny")
-        
+        core.submit_claim(json.dumps(tiny_polygon), 2018, 2022, "Too tiny", land_url)
+
     # Check date validator
     with direct_vm.expect_revert("Start year cannot be before 2015"):
         direct_vm.value = 5_000_000_000_000_000_000
-        core.submit_claim(valid_polygon_json, 2012, 2018, "Before 2015")
-        
+        core.submit_claim(valid_polygon_json, 2012, 2018, "Before 2015", land_url)
+
     with direct_vm.expect_revert("Start year must be strictly less than end year"):
         direct_vm.value = 5_000_000_000_000_000_000
-        core.submit_claim(valid_polygon_json, 2020, 2020, "Equal years")
+        core.submit_claim(valid_polygon_json, 2020, 2020, "Equal years", land_url)
+
+    # Land evidence URL validator (public http(s) required)
+    with direct_vm.expect_revert("land_evidence_url must be a public"):
+        direct_vm.value = 5_000_000_000_000_000_000
+        core.submit_claim(valid_polygon_json, 2018, 2022, "Missing URL", "")

@@ -124,7 +124,7 @@ def test_tokenomics_solvency(direct_vm, direct_deploy, direct_alice, direct_bob)
     direct_vm.warp("2023-11-15T00:00:00+00:00")
     direct_vm.value = 5_000_000_000_000_000_000 # 5 GEN
     polygon_1 = [[10.7769, 106.7009], [10.7775, 106.7009], [10.7775, 106.7015], [10.7769, 106.7015]]
-    claim_id_1 = core.submit_claim(json.dumps(polygon_1), 2018, 2022, "Alice land plot")
+    claim_id_1 = core.submit_claim(json.dumps(polygon_1), 2018, 2022, "Alice land plot", "https://gen-squat.vercel.app/samples/hcmc-land-record.html")
     
     # Mock LLM consensus for high confidence
     ruling_high_conf = {
@@ -152,7 +152,7 @@ def test_tokenomics_solvency(direct_vm, direct_deploy, direct_alice, direct_bob)
     direct_vm.sender = direct_bob
     direct_vm.value = 5_000_000_000_000_000_000 # 5 GEN
     polygon_2 = [[21.0285, 105.8542], [21.0295, 105.8542], [21.0295, 105.8552], [21.0285, 105.8552]]
-    claim_id_2 = core.submit_claim(json.dumps(polygon_2), 2018, 2022, "Bob land plot")
+    claim_id_2 = core.submit_claim(json.dumps(polygon_2), 2018, 2022, "Bob land plot", "https://gen-squat.vercel.app/samples/hanoi-land-record.html")
     
     # Mock LLM consensus for low confidence (e.g. 0.5)
     ruling_low_conf = {
@@ -182,7 +182,7 @@ def test_tokenomics_solvency(direct_vm, direct_deploy, direct_alice, direct_bob)
     direct_vm.sender = direct_alice
     direct_vm.value = 5_000_000_000_000_000_000
     polygon_3 = [[12.6712, 108.0382], [12.6722, 108.0382], [12.6722, 108.0392], [12.6712, 108.0392]]
-    claim_id_3 = core.submit_claim(json.dumps(polygon_3), 2018, 2022, "Alice agricultural plot")
+    claim_id_3 = core.submit_claim(json.dumps(polygon_3), 2018, 2022, "Alice agricultural plot", "https://gen-squat.vercel.app/samples/daklak-land-record.html")
     
     # Mock LLM consensus for claim 3 (high confidence clean)
     ruling_clean = {

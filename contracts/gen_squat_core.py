@@ -40,6 +40,9 @@ class Contract(gl.Contract):
     claim_rulings: TreeMap[str, str]
     disputes: TreeMap[str, str]
     dispute_rulings: TreeMap[str, str]
+    # claim_id -> last dispute_key (used by mint_boundary_nft to look up
+    # the FINAL dispute ruling without iterating the disputes map).
+    claim_last_dispute: TreeMap[str, str]
     claim_count: u256
     # Standalone stake ledger (used when treasury_address is zero)
     claim_stakes: TreeMap[str, u256]
@@ -51,7 +54,13 @@ class Contract(gl.Contract):
     # Contract dependencies (optional — zero address = standalone Studio mode)
     treasury_address: Address
     nft_address: Address
-    
+    # Owner + lock flag for dependency injection.
+    # Reviewer feedback (audit): any caller could previously replace treasury / NFT
+    # dependencies. `set_dependencies` is now owner-only and permanently freezes
+    # once `lock_dependencies` is called.
+    owner: Address
+    deps_locked: bool
+
     # Reputation & security
     user_reputation: TreeMap[Address, i256]
     user_ban_expiry: TreeMap[Address, u256]
@@ -60,6 +69,8 @@ class Contract(gl.Contract):
         self.claim_count = u256(0)
         self.treasury_address = ZERO_ADDR
         self.nft_address = ZERO_ADDR
+        self.owner = gl.message.sender_address
+        self.deps_locked = False
 
     def _has_treasury(self) -> bool:
         return self.treasury_address != ZERO_ADDR
@@ -75,11 +86,30 @@ class Contract(gl.Contract):
             cur = self.withdrawable[who]
         self.withdrawable[who] = cur + amount
 
+    def _only_owner(self) -> None:
+        if gl.message.sender_address != self.owner:
+            raise ValueError("Only the deployer/owner can update contract dependencies")
+
     @gl.public.write
     def set_dependencies(self, treasury_address: Address, nft_address: Address) -> None:
-        # Allows updating dependencies if needed during setup
+        """Owner-only dependency injection. Reverts once `lock_dependencies` was called."""
+        self._only_owner()
+        if self.deps_locked:
+            raise ValueError("Dependencies are permanently locked and cannot be replaced")
         self.treasury_address = treasury_address
         self.nft_address = nft_address
+
+    @gl.public.write
+    def lock_dependencies(self) -> None:
+        """Owner-only. Permanently freezes treasury/NFT addresses to close the audit finding."""
+        self._only_owner()
+        self.deps_locked = True
+
+    @gl.public.write
+    def transfer_ownership(self, new_owner: Address) -> None:
+        """Owner-only. Handoff (does not require unlock)."""
+        self._only_owner()
+        self.owner = new_owner
 
     def _parse_timestamp(self, dt) -> int:
         if dt is None:
@@ -530,6 +560,9 @@ class Contract(gl.Contract):
         
         final_ruling_str = gl.eq_principle.prompt_comparative(dispute_task_fn, dispute_principle)
         self.dispute_rulings[dispute_key] = final_ruling_str
+        # Track the latest dispute per claim so mint_boundary_nft can locate
+        # the final ruling without iterating the TreeMap.
+        self.claim_last_dispute[claim_id] = dispute_key
         
         # Process stakes based on verdict
         final_ruling = json.loads(final_ruling_str)
@@ -588,32 +621,69 @@ class Contract(gl.Contract):
 
     @gl.public.write.payable
     def mint_boundary_nft(self, claim_id: str) -> str:
-        """Payable: 2 GEN mint fee. Allowed after ANALYZED/RESOLVED* with confidence >= 0.8."""
+        """Payable: 2 GEN mint fee. Allowed after ANALYZED / RESOLVED_UPHELD with confidence >= 0.8.
+
+        Reviewer feedback (audit): an overturned claim previously minted the
+        superseded original ruling. Now the mint source is chosen from the
+        FINAL dispute ruling when the claim was disputed, and RESOLVED_OVERTURNED
+        claims whose final verdict flipped the outcome cannot mint at all.
+        """
         if gl.message.value < FEE_MINT:
             raise ValueError("Mint fee of 2 GEN is required (payable value)")
-            
+
         if claim_id not in self.claims:
             raise ValueError("Claim does not exist")
         claim_json = self.claims[claim_id]
-            
+
         claim = json.loads(claim_json)
         allowed_status = ("ANALYZED", "RESOLVED", "RESOLVED_UPHELD", "RESOLVED_OVERTURNED")
         if claim["status"] not in allowed_status:
             raise ValueError("NFT can only be minted after analysis (or full resolution)")
-            
+
         if claim_id not in self.claim_rulings:
             raise ValueError("Ruling does not exist for this claim")
-        ruling_json = self.claim_rulings[claim_id]
-        ruling = json.loads(ruling_json)
+
+        # Locate the final dispute ruling (if any) via the per-claim index.
+        final_dispute_key = ""
+        final_dispute_json = ""
+        if claim_id in self.claim_last_dispute:
+            final_dispute_key = self.claim_last_dispute[claim_id]
+            if final_dispute_key in self.dispute_rulings:
+                final_dispute_json = self.dispute_rulings[final_dispute_key]
+
+        # Decide the source-of-truth ruling for the SBT.
+        # - RESOLVED_OVERTURNED: the original ruling was proven wrong. The SBT
+        #   MUST reflect the arbitrator's final verdict, not the superseded one.
+        #   If the final verdict flipped the encroachment_detected bit, the
+        #   original ruling's claim is meaningless as evidence — block the mint.
+        # - RESOLVED_UPHELD / ANALYZED / RESOLVED: mint from the original ruling.
+        source_ruling_json = self.claim_rulings[claim_id]
+        used_final_dispute = False
+
+        if claim["status"] == "RESOLVED_OVERTURNED":
+            if not final_dispute_json:
+                raise ValueError("Overturned claim has no dispute ruling on record — cannot mint")
+            original_ruling = json.loads(self.claim_rulings[claim_id])
+            final_ruling = json.loads(final_dispute_json)
+            if bool(original_ruling.get("encroachment_detected")) != bool(final_ruling.get("encroachment_detected")):
+                raise ValueError(
+                    "Cannot mint boundary SBT: the final dispute ruling overturned the original "
+                    "encroachment verdict. Minting the original credential would misrepresent the case."
+                )
+            # Verdicts agree on the bit; use the final dispute ruling as the credential source
+            source_ruling_json = final_dispute_json
+            used_final_dispute = True
+
+        ruling = json.loads(source_ruling_json)
         if float(ruling["confidence"]) < 0.8:
             raise ValueError(f"Ruling confidence ({ruling['confidence']}) must be >= 0.8 to mint NFT")
 
         if claim_id in self.boundary_nfts and self.boundary_nfts[claim_id] != "":
             raise ValueError("Boundary NFT already minted for this claim")
-            
-        # Hash ruling to serve as proof
+
+        # Hash the SOURCE ruling (final dispute ruling on overturned-but-agreeing cases)
         import hashlib
-        ruling_hash = hashlib.sha256(ruling_json.encode("utf-8")).hexdigest()
+        ruling_hash = hashlib.sha256(source_ruling_json.encode("utf-8")).hexdigest()
 
         evidence_urls = ruling.get("evidence_urls", [])
         land_url = claim.get("land_evidence_url", "")
@@ -631,6 +701,8 @@ class Contract(gl.Contract):
             "ruling_hash": ruling_hash,
             "confidence": ruling.get("confidence"),
             "encroachment_detected": ruling.get("encroachment_detected"),
+            "source": "dispute_ruling" if used_final_dispute else "original_ruling",
+            "dispute_key": final_dispute_key,
         }
         metadata_str = json.dumps(metadata, sort_keys=True)
         self.boundary_nfts[claim_id] = metadata_str

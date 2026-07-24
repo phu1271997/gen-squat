@@ -111,7 +111,7 @@ def test_analyze_consensus_flow(direct_vm, direct_deploy, direct_alice):
     
     direct_vm.warp("2023-11-15T00:00:00+00:00")
     direct_vm.value = 5_000_000_000_000_000_000 # 5 GEN
-    claim_id = core.submit_claim(valid_polygon_json, 2018, 2022, "District 2 plot")
+    claim_id = core.submit_claim(valid_polygon_json, 2018, 2022, "District 2 plot", "https://gen-squat.vercel.app/samples/hcmc-land-record.html")
     assert claim_id == "claim_1"
     
     # 3. Setup mocks for Web APIs and LLM
