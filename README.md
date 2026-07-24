@@ -6,7 +6,7 @@ GenSquat turns a land boundary claim into an on-chain AI forensics case: stake G
 |---|---|
 | **GitHub** | https://github.com/phu1271997/gen-squat |
 | **Live app** | https://gen-squat.vercel.app |
-| **Core contract** | `contracts/gen_squat_core.py` |
+| **Core contract** | `contracts/gen_squat_core.py` · `0x28Ce1CaBE6C7e6B3Fe6FB58519D322a64eA122fB` |
 | **Network** | GenLayer Studionet · `https://studio.genlayer.com/api` |
 | **Judge pack** | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) |
 
