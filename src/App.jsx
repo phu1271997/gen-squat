@@ -153,7 +153,7 @@ function App() {
       setProgress('SUBMITTING');
       await client.waitForTransactionReceipt({
         hash: txHash,
-        status: TransactionStatus.FINALIZED,
+        status: TransactionStatus.ACCEPTED,
       });
       
       setProgress('FETCHING_COUNTER');
@@ -207,7 +207,7 @@ function App() {
         value: PAYABLE.submitClaim,
       });
       setProgress('SUBMITTING');
-      await client.waitForTransactionReceipt({ hash: submitTx, status: TransactionStatus.FINALIZED });
+      await client.waitForTransactionReceipt({ hash: submitTx, status: TransactionStatus.ACCEPTED });
 
       setProgress('FETCHING_COUNTER');
       const latestCount = await client.readContract({
@@ -232,7 +232,7 @@ function App() {
           setProgress(tx.status);
         } catch (_) {}
       }, 2000);
-      await client.waitForTransactionReceipt({ hash: analyzeTx, status: TransactionStatus.FINALIZED });
+      await client.waitForTransactionReceipt({ hash: analyzeTx, status: TransactionStatus.ACCEPTED });
       clearInterval(poll);
 
       setProgress('FINALIZED');
@@ -279,7 +279,7 @@ function App() {
       
       await client.waitForTransactionReceipt({
         hash: txHash,
-        status: TransactionStatus.FINALIZED,
+        status: TransactionStatus.ACCEPTED,
       });
       
       clearInterval(interval);
@@ -321,7 +321,7 @@ function App() {
       
       await client.waitForTransactionReceipt({
         hash: txHash,
-        status: TransactionStatus.FINALIZED,
+        status: TransactionStatus.ACCEPTED,
       });
       
       clearInterval(interval);
@@ -357,7 +357,7 @@ function App() {
       
       await client.waitForTransactionReceipt({
         hash: txHash,
-        status: TransactionStatus.FINALIZED,
+        status: TransactionStatus.ACCEPTED,
       });
       
       setSuccess(`Soulbound Boundary Proof NFT minted (2 GEN fee)!`);
