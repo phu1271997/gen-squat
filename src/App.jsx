@@ -1,31 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  FileText, 
-  Map, 
-  Search, 
-  Layers, 
-  RotateCw, 
-  AlertTriangle, 
-  CheckCircle, 
-  Shield, 
+import {
+  FileText,
+  Map,
+  Search,
+  Layers,
+  RotateCw,
+  AlertTriangle,
+  CheckCircle,
+  Shield,
   Info,
   Calendar,
   Hammer,
   HelpCircle,
   Copy,
   Check,
-  Settings
+  Settings,
+  Wallet,
+  LogOut,
 } from 'lucide-react';
 import {
-  client,
+  readClient,
+  getSigner,
   CONTRACT_ADDRESS as INITIAL_CONTRACT_ADDRESS,
-  account,
-  privateKey,
   PAYABLE,
   config,
   healthCheck,
   requireContract,
   EXPECTED_METHODS,
+  connectWallet,
+  switchToStudio,
+  getConnectedAddress,
+  onAccountsChanged,
+  onChainChanged,
+  CHAIN_ID_HEX,
 } from './genlayerClient';
 import { TransactionStatus } from 'genlayer-js/types';
 
@@ -71,9 +78,12 @@ function App() {
   const [activeTab, setActiveTab] = useState('submit');
   const [contractAddress, setContractAddress] = useState(INITIAL_CONTRACT_ADDRESS);
   const [showConfig, setShowConfig] = useState(false);
-  const [copiedKey, setCopiedKey] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [copiedContract, setCopiedContract] = useState(false);
+
+  // Wallet — MetaMask on studionet (R21–R23). No burner key in the bundle.
+  const [walletAddress, setWalletAddress] = useState(null);
+  const [connectingWallet, setConnectingWallet] = useState(false);
 
   // Form states
   const [polygonJson, setPolygonJson] = useState(COORD_TEMPLATES.HCMC.polygon);
@@ -108,6 +118,50 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Silent detect of already-authorized MetaMask account on load.
+  useEffect(() => {
+    getConnectedAddress().then((addr) => {
+      if (addr) setWalletAddress(addr);
+    });
+    const offAcc = onAccountsChanged((addr) => setWalletAddress(addr));
+    // Full reload on chain change keeps the client cache in sync — MetaMask's
+    // own guidance for dApps that pin to a single chain.
+    const offChain = onChainChanged(() => window.location.reload());
+    return () => { offAcc(); offChain(); };
+  }, []);
+
+  const requireWallet = () => {
+    if (!walletAddress) {
+      throw new Error(
+        'Connect a MetaMask wallet that already holds GEN on GenLayer Studionet before signing. Fund from the Studio → Accounts panel.'
+      );
+    }
+    return walletAddress;
+  };
+
+  const handleConnectWallet = async () => {
+    setConnectingWallet(true);
+    setError('');
+    try {
+      const addr = await connectWallet();
+      setWalletAddress(addr);
+      setSuccess(`Wallet connected on Studionet: ${addr.slice(0, 6)}...${addr.slice(-4)}`);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setConnectingWallet(false);
+    }
+  };
+
+  const handleSwitchNetwork = async () => {
+    try {
+      await switchToStudio();
+      setSuccess('MetaMask switched to GenLayer Studionet.');
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  };
+
   const handleSelectPreset = (key) => {
     const p = COORD_TEMPLATES[key];
     setPolygonJson(p.polygon);
@@ -134,10 +188,11 @@ function App() {
     setProgress('INITIATING_TX');
     try {
       const addr = activeContract();
+      const signer = getSigner(requireWallet());
       if (!landEvidenceUrl?.startsWith('http')) {
         throw new Error('land_evidence_url must be a public http(s) page with parcel / photo / cadastral notes.');
       }
-      const txHash = await client.writeContract({
+      const txHash = await signer.writeContract({
         address: addr,
         functionName: 'submit_claim',
         args: [
@@ -149,20 +204,20 @@ function App() {
         ],
         value: PAYABLE.submitClaim,
       });
-      
+
       setProgress('SUBMITTING');
-      await client.waitForTransactionReceipt({
+      await signer.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.ACCEPTED,
       });
-      
+
       setProgress('FETCHING_COUNTER');
-      const latestCount = await client.readContract({
+      const latestCount = await readClient.readContract({
         address: addr,
         functionName: 'get_claim_count',
         args: []
       });
-      
+
       const newClaimId = `claim_${latestCount}`;
       setClaimId(newClaimId);
       setSuccess(`Claim submitted with 5 GEN stake. ID: ${newClaimId}. Evidence: ${landEvidenceUrl}`);
@@ -191,6 +246,7 @@ function App() {
     setProgress('INITIATING_TX');
     try {
       const addr = activeContract();
+      const signer = getSigner(requireWallet());
       const preset = COORD_TEMPLATES.HCMC;
       const evidence = sampleEvidence('hcmc-land-record.html');
       setPolygonJson(preset.polygon);
@@ -200,17 +256,17 @@ function App() {
       setLandEvidenceUrl(evidence);
 
       // 1. submit_claim (5 GEN)
-      const submitTx = await client.writeContract({
+      const submitTx = await signer.writeContract({
         address: addr,
         functionName: 'submit_claim',
         args: [preset.polygon, preset.yearStart, preset.yearEnd, preset.description, evidence],
         value: PAYABLE.submitClaim,
       });
       setProgress('SUBMITTING');
-      await client.waitForTransactionReceipt({ hash: submitTx, status: TransactionStatus.ACCEPTED });
+      await signer.waitForTransactionReceipt({ hash: submitTx, status: TransactionStatus.ACCEPTED });
 
       setProgress('FETCHING_COUNTER');
-      const latestCount = await client.readContract({
+      const latestCount = await readClient.readContract({
         address: addr,
         functionName: 'get_claim_count',
         args: [],
@@ -220,7 +276,7 @@ function App() {
 
       // 2. analyze_claim (AI consensus reads the land evidence + OSM/STAC)
       setProgress('PROPOSING');
-      const analyzeTx = await client.writeContract({
+      const analyzeTx = await signer.writeContract({
         address: addr,
         functionName: 'analyze_claim',
         args: [newClaimId],
@@ -228,11 +284,11 @@ function App() {
       });
       const poll = setInterval(async () => {
         try {
-          const tx = await client.getTransaction({ hash: analyzeTx });
+          const tx = await readClient.getTransaction({ hash: analyzeTx });
           setProgress(tx.status);
         } catch (_) {}
       }, 2000);
-      await client.waitForTransactionReceipt({ hash: analyzeTx, status: TransactionStatus.ACCEPTED });
+      await signer.waitForTransactionReceipt({ hash: analyzeTx, status: TransactionStatus.ACCEPTED });
       clearInterval(poll);
 
       setProgress('FINALIZED');
@@ -260,28 +316,29 @@ function App() {
     setProgress('PENDING');
     try {
       const addr = activeContract();
-      const txHash = await client.writeContract({
+      const signer = getSigner(requireWallet());
+      const txHash = await signer.writeContract({
         address: addr,
         functionName: 'analyze_claim',
         args: [claimId],
         value: 0n,
       });
-      
+
       // Poll consensus state change dynamically
       const interval = setInterval(async () => {
         try {
-          const tx = await client.getTransaction({ hash: txHash });
+          const tx = await readClient.getTransaction({ hash: txHash });
           setProgress(tx.status);
         } catch (err) {
           // Silent catch
         }
       }, 2000);
-      
-      await client.waitForTransactionReceipt({
+
+      await signer.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.ACCEPTED,
       });
-      
+
       clearInterval(interval);
       setProgress('FINALIZED');
       setSuccess(`AI Forensic analysis completed successfully for ${claimId}`);

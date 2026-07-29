@@ -49,10 +49,11 @@ def test_set_dependencies_owner_only(direct_vm, direct_deploy, direct_alice, dir
     # Deployer is the default vm sender at deploy time. `direct_alice` will
     # try to overwrite dependencies after deploy and must be rejected.
     core = direct_deploy("contracts/gen_squat_core.py")
+    from genlayer import Address
     deployer = direct_vm.sender
 
-    fake_treasury = "0x1111111111111111111111111111111111111111"
-    fake_nft = "0x2222222222222222222222222222222222222222"
+    fake_treasury = Address("0x1111111111111111111111111111111111111111")
+    fake_nft = Address("0x2222222222222222222222222222222222222222")
 
     # Attacker (alice) tries to hijack the dependency wiring.
     direct_vm.sender = direct_alice
@@ -66,8 +67,8 @@ def test_set_dependencies_owner_only(direct_vm, direct_deploy, direct_alice, dir
 
     # Owner (deployer) may set dependencies exactly once and then freeze.
     direct_vm.sender = deployer
-    good_treasury = "0x3333333333333333333333333333333333333333"
-    good_nft = "0x4444444444444444444444444444444444444444"
+    good_treasury = Address("0x3333333333333333333333333333333333333333")
+    good_nft = Address("0x4444444444444444444444444444444444444444")
     core.set_dependencies(good_treasury, good_nft)
     core.lock_dependencies()
 

@@ -25,7 +25,11 @@ dist-ssr
 
 # Environment secrets
 .env
-.env.production
-.env.local
 .env.development
+.env.local
+.env.production
 .vercel
+
+# Python
+__pycache__/
+*.pyc

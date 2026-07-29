@@ -1,5 +1,3 @@
-# v0.2.16
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
 
@@ -30,7 +28,7 @@ class Contract(gl.Contract):
             raise ValueError("Only the core GenSquat contract is authorized to mint")
             
         token_id = f"sbt_{claim_id}"
-        if self.nfts[token_id]:
+        if token_id in self.nfts and self.nfts[token_id]:
             raise ValueError("SBT has already been minted for this claim")
             
         # Parse inputs for structure safety
@@ -55,7 +53,6 @@ class Contract(gl.Contract):
     @gl.public.view
     def get_nft(self, claim_id: str) -> str:
         token_id = f"sbt_{claim_id}"
-        nft_json = self.nfts[token_id]
-        if not nft_json:
+        if token_id not in self.nfts or not self.nfts[token_id]:
             raise ValueError("NFT does not exist for this claim")
-        return nft_json
+        return self.nfts[token_id]

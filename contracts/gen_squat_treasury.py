@@ -1,6 +1,5 @@
-# v0.2.16
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
+import json
 
 class Contract(gl.Contract):
     # Owner of the treasury (deployer)
@@ -177,7 +176,6 @@ class Contract(gl.Contract):
 
     @gl.public.view
     def get_balance(self, user: Address) -> u256:
-        from genlayer.py.types import Address
         if not isinstance(user, Address):
             user = Address(user)
         if user not in self.withdrawable_balances:
@@ -190,5 +188,4 @@ class Contract(gl.Contract):
             "surplus_pool": int(self.surplus_pool),
             "total_locked": int(self.total_locked)
         }
-        import json
         return json.dumps(stats)
