@@ -53,7 +53,7 @@
 | Field | Value |
 |---|---|
 | Core source | [`contracts/gen_squat_core.py`](../contracts/gen_squat_core.py) |
-| Address | `0x28Ce1CaBE6C7e6B3Fe6FB58519D322a64eA122fB` (audit-fixed bytecode) |
+| Address | `0xE49aBAdE3E66fb5975B987F9F3F776F2fEd24B07` (audit-fixed bytecode, MetaMask-signing frontend) |
 | Network | GenLayer Studionet |
 | RPC | `https://studio.genlayer.com/api` |
 | Live app | https://gen-squat.vercel.app |

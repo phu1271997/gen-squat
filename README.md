@@ -6,7 +6,7 @@ GenSquat turns a land boundary claim into an on-chain AI forensics case: stake G
 |---|---|
 | **GitHub** | https://github.com/phu1271997/gen-squat |
 | **Live app** | https://gen-squat.vercel.app |
-| **Core contract** | `contracts/gen_squat_core.py` · `0x28Ce1CaBE6C7e6B3Fe6FB58519D322a64eA122fB` |
+| **Core contract** | `contracts/gen_squat_core.py` · `0xE49aBAdE3E66fb5975B987F9F3F776F2fEd24B07` |
 | **Network** | GenLayer Studionet · `https://studio.genlayer.com/api` |
 | **Judge pack** | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) |
 
@@ -52,12 +52,22 @@ npm install
 npm run dev
 ```
 
+## Wallet
+
+MetaMask signs every write. No burner key is generated in the browser or
+shipped in the bundle. On connect the dApp calls
+`wallet_switchEthereumChain` (chain `0xF1EF` = 61999) and falls back to
+`wallet_addEthereumChain` if Studionet is not yet in MetaMask. Fund the
+connected account with GEN from **Studio → Accounts** before the first
+write — Studionet has no public faucet. Read-only views work without a
+wallet.
+
 ## Deploy (Studio)
 
-1. https://studio.genlayer.com/run-debug  
-2. Deploy `contracts/gen_squat_core.py` → SUCCESS  
-3. Set `VITE_CONTRACT_ADDRESS` on Vercel + redeploy  
-4. Deployment Protection **off**  
+1. https://studio.genlayer.com/run-debug
+2. Deploy `contracts/gen_squat_core.py` → SUCCESS
+3. Set `VITE_CONTRACT_ADDRESS` on Vercel + redeploy
+4. Deployment Protection **off**
 
 Handoff: [`ANTIGRAVITY_PROMPT.md`](ANTIGRAVITY_PROMPT.md)
 

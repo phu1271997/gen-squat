@@ -362,25 +362,26 @@ function App() {
     setProgress('PENDING');
     try {
       const addr = activeContract();
-      const txHash = await client.writeContract({
+      const signer = getSigner(requireWallet());
+      const txHash = await signer.writeContract({
         address: addr,
         functionName: 'dispute_claim',
         args: [claimId, challengeReason],
         value: PAYABLE.disputeClaim,
       });
-      
+
       const interval = setInterval(async () => {
         try {
-          const tx = await client.getTransaction({ hash: txHash });
+          const tx = await readClient.getTransaction({ hash: txHash });
           setProgress(tx.status);
         } catch (err) {}
       }, 2000);
-      
-      await client.waitForTransactionReceipt({
+
+      await signer.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.ACCEPTED,
       });
-      
+
       clearInterval(interval);
       setProgress('FINALIZED');
       setSuccess(`Dispute arbitration finalized on-chain (10 GEN stake)!`);
@@ -405,14 +406,15 @@ function App() {
     setProgress('MINTING');
     try {
       const addr = activeContract();
-      const txHash = await client.writeContract({
+      const signer = getSigner(requireWallet());
+      const txHash = await signer.writeContract({
         address: addr,
         functionName: 'mint_boundary_nft',
         args: [claimId],
         value: PAYABLE.mintNft,
       });
-      
-      await client.waitForTransactionReceipt({
+
+      await signer.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.ACCEPTED,
       });
@@ -440,16 +442,16 @@ function App() {
     setNftData(null);
     try {
       const addr = activeContract();
-      const claimStr = await client.readContract({
+      const claimStr = await readClient.readContract({
         address: addr,
         functionName: 'get_claim',
         args: [id],
       });
       const parsedClaim = JSON.parse(claimStr);
       setClaimData(parsedClaim);
-      
+
       try {
-        const rulingStr = await client.readContract({
+        const rulingStr = await readClient.readContract({
           address: addr,
           functionName: 'get_ruling',
           args: [id],
@@ -461,7 +463,7 @@ function App() {
       }
 
       try {
-        const nftStr = await client.readContract({
+        const nftStr = await readClient.readContract({
           address: addr,
           functionName: 'get_boundary_nft',
           args: [id],
@@ -536,26 +538,61 @@ function App() {
         <div className="network-info">
           <div className="glass-pill">
             <span className="status-dot"></span>
-            <span>Studio Net</span>
+            <span>Studio Net · {CHAIN_ID_HEX}</span>
           </div>
-          
-          <div className="glass-pill">
-            <span>Identity:</span>
-            <span className="address-text">{account.address.slice(0, 6)}...{account.address.slice(-4)}</span>
-            <button 
-              className="copy-btn" 
-              onClick={() => copyToClipboard(account.address, setCopiedAddress)}
-              title="Copy User Address"
+
+          {walletAddress ? (
+            <div className="glass-pill">
+              <Wallet size={14} />
+              <span className="address-text">{walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}</span>
+              <button
+                className="copy-btn"
+                onClick={() => copyToClipboard(walletAddress, setCopiedAddress)}
+                title="Copy wallet address"
+              >
+                {copiedAddress ? <Check size={14} className="success" /> : <Copy size={14} />}
+              </button>
+              <button
+                className="copy-btn"
+                onClick={() => setWalletAddress(null)}
+                title="Forget this address in the dApp (MetaMask stays connected)"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              className="glass-pill"
+              onClick={handleConnectWallet}
+              disabled={connectingWallet}
+              title="Connect MetaMask on GenLayer Studionet"
+              style={{ cursor: 'pointer' }}
             >
-              {copiedAddress ? <Check size={14} className="success" /> : <Copy size={14} />}
+              {connectingWallet ? <RotateCw className="spinner" size={14} /> : <Wallet size={14} />}
+              <span>{connectingWallet ? 'Connecting…' : 'Connect Wallet'}</span>
             </button>
-          </div>
+          )}
 
           <button className="glass-pill" onClick={() => setShowConfig(!showConfig)} title="Network Config">
             <Settings size={16} />
           </button>
         </div>
       </header>
+
+      {!walletAddress && (
+        <div className="status-box" style={{ borderLeft: '3px solid var(--color-warning)' }}>
+          <Info size={18} style={{ color: 'var(--color-warning)' }} />
+          <div className="status-content">
+            <h4>Wallet required to write on Studionet</h4>
+            <p style={{ margin: '4px 0 0 0', fontSize: 13, lineHeight: 1.45 }}>
+              Connect a MetaMask account already funded with GEN on GenLayer Studionet
+              (chain <code>{CHAIN_ID_HEX}</code>, RPC <code>{config.rpcUrl}</code>).
+              Fund from the Studio → <em>Accounts</em> panel by transferring GEN from a
+              pre-funded Studio account. Read-only views (get_claim, get_ruling) work without a wallet.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* One-click reviewer sample dispute — proves live wiring end-to-end */}
       <div className="glass-card" style={{ textAlign: 'left', marginBottom: '20px', border: '1px solid rgba(16,185,129,0.5)', background: 'rgba(16,185,129,0.04)' }}>
@@ -574,11 +611,12 @@ function App() {
           <button
             className="btn-primary"
             onClick={handleRunSampleDispute}
-            disabled={loading}
+            disabled={loading || !walletAddress}
+            title={!walletAddress ? 'Connect MetaMask on Studionet first' : ''}
             style={{ background: 'linear-gradient(135deg, var(--color-success) 0%, #10b981 100%)', minWidth: 260 }}
           >
             {loading ? <RotateCw className="spinner" size={16} /> : <CheckCircle size={16} />}
-            Run sample dispute (submit + analyze)
+            {walletAddress ? 'Run sample dispute (submit + analyze)' : 'Connect wallet to run sample'}
           </button>
         </div>
       </div>
@@ -639,25 +677,33 @@ function App() {
             </div>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Local Decryption Key (For Studio Verification)</label>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <input 
-                type="password" 
-                className="text-input" 
-                readOnly 
-                value={privateKey} 
-                style={{ fontFamily: 'monospace', fontSize: '11px' }}
-              />
-              <button 
-                className="copy-btn" 
-                style={{ padding: '12px' }} 
-                onClick={() => copyToClipboard(privateKey, setCopiedKey)}
+            <label className="form-label">MetaMask · GenLayer Studionet</label>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                className="btn-primary"
+                style={{ flex: '0 0 auto', padding: '10px 14px' }}
+                onClick={walletAddress ? () => setWalletAddress(null) : handleConnectWallet}
+                disabled={connectingWallet}
               >
-                {copiedKey ? <Check size={16} /> : <Copy size={16} />}
+                {connectingWallet
+                  ? <RotateCw className="spinner" size={14} />
+                  : walletAddress ? <LogOut size={14} /> : <Wallet size={14} />}
+                {walletAddress
+                  ? `Forget ${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}`
+                  : 'Connect MetaMask'}
+              </button>
+              <button
+                className="btn-primary"
+                style={{ flex: '0 0 auto', padding: '10px 14px', background: 'transparent', border: '1px solid var(--border-glass)' }}
+                onClick={handleSwitchNetwork}
+              >
+                Switch to Studionet ({CHAIN_ID_HEX})
               </button>
             </div>
-            <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
-              This private key is saved locally in your browser. Use this key in the GenLayer Studio to sign validator transactions if testing multi-party setups.
+            <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '6px', display: 'block' }}>
+              Signing goes through MetaMask on chain <code>{CHAIN_ID_HEX}</code>. No private key
+              is ever generated in the browser or shipped in the bundle. Fund the connected
+              account from Studio → Accounts before writing.
             </span>
           </div>
         </div>
@@ -818,13 +864,14 @@ function App() {
                   />
                 </div>
 
-                <button 
-                  className="btn-primary" 
+                <button
+                  className="btn-primary"
                   onClick={handleSubmitClaim}
-                  disabled={loading}
+                  disabled={loading || !walletAddress}
+                  title={!walletAddress ? 'Connect MetaMask on Studionet first' : ''}
                 >
                   {loading ? <RotateCw className="spinner" size={16} /> : <CheckCircle size={16} />}
-                  Submit Claim (payable 5 GEN)
+                  {walletAddress ? 'Submit Claim (payable 5 GEN)' : 'Connect wallet to submit'}
                 </button>
               </div>
             )}
@@ -851,13 +898,14 @@ function App() {
                   />
                 </div>
 
-                <button 
-                  className="btn-primary" 
+                <button
+                  className="btn-primary"
                   onClick={handleAnalyzeClaim}
-                  disabled={loading || !claimId}
+                  disabled={loading || !claimId || !walletAddress}
+                  title={!walletAddress ? 'Connect MetaMask on Studionet first' : ''}
                 >
                   {loading ? <RotateCw className="spinner" size={16} /> : <Layers size={16} />}
-                  Start On-Chain AI Analysis
+                  {walletAddress ? 'Start On-Chain AI Analysis' : 'Connect wallet to analyze'}
                 </button>
               </div>
             )}
@@ -895,13 +943,14 @@ function App() {
                   />
                 </div>
 
-                <button 
-                  className="btn-primary" 
+                <button
+                  className="btn-primary"
                   onClick={handleDisputeClaim}
-                  disabled={loading || !claimId || !challengeReason}
+                  disabled={loading || !claimId || !challengeReason || !walletAddress}
+                  title={!walletAddress ? 'Connect MetaMask on Studionet first' : ''}
                 >
                   {loading ? <RotateCw className="spinner" size={16} /> : <AlertTriangle size={16} />}
-                  Submit Dispute (payable 10 GEN)
+                  {walletAddress ? 'Submit Dispute (payable 10 GEN)' : 'Connect wallet to dispute'}
                 </button>
               </div>
             )}
@@ -1122,14 +1171,15 @@ function App() {
                           <p style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginBottom: '14px', lineHeight: '1.4' }}>
                             You can mint a Soulbound Boundary NFT SBT as immutable, cryptographically verifiable proof of ownership or encroachment to present to traditional jurisdictions or courts.
                           </p>
-                          <button 
-                            className="btn-primary" 
+                          <button
+                            className="btn-primary"
                             style={{ background: 'linear-gradient(135deg, var(--color-purple) 0%, #a855f7 100%)' }}
-                            disabled={loading || Number(rulingData.confidence) < 0.8}
+                            disabled={loading || Number(rulingData.confidence) < 0.8 || !walletAddress}
+                            title={!walletAddress ? 'Connect MetaMask on Studionet first' : ''}
                             onClick={handleMintNft}
                           >
                             <Shield size={16} />
-                            Mint Boundary SBT (payable 2 GEN, confidence ≥ 80%)
+                            {walletAddress ? 'Mint Boundary SBT (payable 2 GEN, confidence ≥ 80%)' : 'Connect wallet to mint'}
                           </button>
                           {Number(rulingData.confidence) < 0.8 && (
                             <span style={{ fontSize: '11px', color: 'var(--color-danger)', marginTop: '6px', display: 'block' }}>
