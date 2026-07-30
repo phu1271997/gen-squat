@@ -1,6 +1,6 @@
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
-import hashlib
 
 @gl.contract_interface
 class TreasuryInterface:
@@ -681,6 +681,7 @@ class Contract(gl.Contract):
             raise ValueError("Boundary NFT already minted for this claim")
 
         # Hash the SOURCE ruling (final dispute ruling on overturned-but-agreeing cases)
+        import hashlib
         ruling_hash = hashlib.sha256(source_ruling_json.encode("utf-8")).hexdigest()
 
         evidence_urls = ruling.get("evidence_urls", [])
