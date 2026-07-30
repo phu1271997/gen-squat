@@ -2,10 +2,11 @@
 
 Always follow these 8 strict rules when editing GenLayer smart contracts. Failure to comply will cause compiler/deployment failures in GenLayer Studio.
 
+> **Also read:** `docs/02-common-errors.md` for detailed common errors with examples.
+
 ## ⚠️ Rule 1: Strict Version Headers
-The first line of any contract file must be exactly:
+The **FIRST LINE** of any contract file must be the Depends magic comment (like Solidity's pragma):
 ```python
-# v0.2.16
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 ```
 
