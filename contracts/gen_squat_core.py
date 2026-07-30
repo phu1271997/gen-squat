@@ -110,7 +110,7 @@ class Contract(gl.Contract):
         self._only_owner()
         self.owner = new_owner
 
-    def _parse_timestamp(self, dt) -> int:
+    def _parse_timestamp(self, dt):
         if dt is None:
             return 0
         if isinstance(dt, (int, float)):
@@ -124,7 +124,7 @@ class Contract(gl.Contract):
                 pass
         return 0
 
-    def _parse_year(self, dt) -> int:
+    def _parse_year(self, dt):
         if dt is None:
             return 2026
         if isinstance(dt, (int, float)):
@@ -137,7 +137,7 @@ class Contract(gl.Contract):
         return 2026
 
     # Shoelace formula to approximate polygon area in sq meters
-    def _calculate_polygon_area_m2(self, polygon: list) -> int:
+    def _calculate_polygon_area_m2(self, polygon):
         n = len(polygon)
         if n < 3:
             return 0
@@ -166,7 +166,7 @@ class Contract(gl.Contract):
         area = abs(area_sum) / 2.0
         return int(area)
 
-    def _is_self_intersecting(self, polygon: list) -> bool:
+    def _is_self_intersecting(self, polygon):
         # Simplified segment intersection check
         def intersect(p1, p2, p3, p4):
             def ccw(a, b, c):
@@ -188,8 +188,8 @@ class Contract(gl.Contract):
     def submit_claim(
         self,
         polygon_json: str,
-        year_start: int,
-        year_end: int,
+        year_start: u256,
+        year_end: u256,
         description: str,
         land_evidence_url: str,
     ) -> str:
