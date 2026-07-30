@@ -36,6 +36,11 @@ import {
 } from './genlayerClient';
 import { TransactionStatus } from 'genlayer-js/types';
 
+// waitForTransactionReceipt defaults to 10 retries × 3s = 30s, which is too
+// short for GenLayer nondet consensus (validators run web.render + LLM).
+// Bump generously for AI-jury methods; deterministic tx keep the default.
+const NONDET_WAIT = { retries: 200, interval: 3000 }; // ~10 min ceiling
+
 // Sample land evidence pages are hosted on the public live app under /samples/
 // so the Intelligent Contract can web.render concrete parcel records.
 const sampleEvidence = (slug) => {
@@ -288,7 +293,11 @@ function App() {
           setProgress(tx.status);
         } catch (_) {}
       }, 2000);
-      await signer.waitForTransactionReceipt({ hash: analyzeTx, status: TransactionStatus.ACCEPTED });
+      await signer.waitForTransactionReceipt({
+        hash: analyzeTx,
+        status: TransactionStatus.ACCEPTED,
+        ...NONDET_WAIT,
+      });
       clearInterval(poll);
 
       setProgress('FINALIZED');
@@ -337,6 +346,7 @@ function App() {
       await signer.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.ACCEPTED,
+        ...NONDET_WAIT,
       });
 
       clearInterval(interval);
@@ -380,6 +390,7 @@ function App() {
       await signer.waitForTransactionReceipt({
         hash: txHash,
         status: TransactionStatus.ACCEPTED,
+        ...NONDET_WAIT,
       });
 
       clearInterval(interval);
