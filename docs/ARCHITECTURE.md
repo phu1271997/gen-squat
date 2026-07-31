@@ -7,9 +7,51 @@ graph TD
     Client[React Frontend] -->|submit_claim / dispute_claim| Core[gen_squat_core.py]
     Core -->|deposit_claim_stake / deposit_dispute_stake| Treasury[gen_squat_treasury.py]
     Core -->|mint_sbt| NFT[gen_squat_nft.py]
-    
+
     Core -.->|Overpass Attic Query| OSM[OpenStreetMap API]
     Core -.->|STAC Query| PC[Planetary Computer STAC]
+    Core -.->|Land record page render| LandEvidence[Public land evidence URL]
+```
+
+### End-to-end sequence
+
+```mermaid
+sequenceDiagram
+    participant U as User (MetaMask)
+    participant F as Frontend (Vite/React)
+    participant C as gen_squat_core.py
+    participant V as GenLayer validators (LLM jury)
+    participant W as Land record page + OSM + STAC
+
+    U->>F: connect + fund on Studionet
+    U->>F: submit_claim(polygon, description, land_evidence_url, +5 GEN)
+    F->>C: writeContract(submit_claim, ...)
+    C-->>C: _sanitize_user_text(description) + validate polygon
+    C->>C: store claim, lock stake
+
+    U->>F: analyze_claim(claim_id)
+    F->>C: writeContract(analyze_claim, ...)
+    C->>V: eq_principle.prompt_comparative(task_fn, principle)
+    V->>W: web.render(land_evidence_url) + Overpass + STAC × N years
+    V->>V: 3-lens reasoning (Forensic / Legal / Skeptic) + reconcile
+    V-->>C: ruling JSON (verdict + confidence + injection_detected)
+    C->>C: store ruling, set status ANALYZED
+
+    alt Ruling contested
+        U->>F: dispute_claim(claim_id, challenge_reason, +10 GEN)
+        F->>C: writeContract(dispute_claim, ...)
+        C-->>C: _sanitize_user_text(challenge_reason)
+        C->>V: eq_principle.prompt_comparative(dispute_task_fn, dispute_principle)
+        V-->>C: final ruling (UPHOLD / OVERTURN)
+        C->>C: settle stakes + reputation deltas
+    end
+
+    U->>F: mint_boundary_nft(claim_id, +2 GEN)
+    F->>C: writeContract(mint_boundary_nft, ...)
+    C->>C: pick source ruling (final dispute if overturned & bit agrees)
+    C->>C: refuse if injection_detected=true or confidence < 0.8
+    C-->>F: SBT metadata
+    F->>U: gallery updated
 ```
 
 ## Contract Modules

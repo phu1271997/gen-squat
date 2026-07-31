@@ -17,6 +17,8 @@ import {
   Settings,
   Wallet,
   LogOut,
+  Award,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
   readClient,
@@ -89,6 +91,12 @@ function App() {
   // Wallet — MetaMask on studionet (R21–R23). No burner key in the bundle.
   const [walletAddress, setWalletAddress] = useState(null);
   const [connectingWallet, setConnectingWallet] = useState(false);
+
+  // Bundle B: reputation tier + SBT gallery
+  const [userStats, setUserStats] = useState(null);
+  const [userSbts, setUserSbts] = useState([]);
+  const [showProfile, setShowProfile] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   // Form states
   const [polygonJson, setPolygonJson] = useState(COORD_TEMPLATES.HCMC.polygon);
@@ -165,6 +173,67 @@ function App() {
     } catch (e) {
       setError(e?.message || String(e));
     }
+  };
+
+  // Bundle B: fetch tier + gallery whenever wallet connects or contract changes.
+  // Every view is best-effort — an older contract deploy without get_user_stats
+  // / get_user_sbts simply leaves those slots empty; the UI degrades but never
+  // throws in the user's face.
+  const refreshProfile = async (silent = false) => {
+    if (!walletAddress) {
+      setUserStats(null);
+      setUserSbts([]);
+      return;
+    }
+    if (!silent) setProfileLoading(true);
+    try {
+      const addr = activeContract();
+      try {
+        const statsStr = await readClient.readContract({
+          address: addr,
+          functionName: 'get_user_stats',
+          args: [walletAddress],
+        });
+        setUserStats(typeof statsStr === 'string' ? JSON.parse(statsStr) : statsStr);
+      } catch (statsErr) {
+        // Old deploy — expose a minimal shape so the profile panel still renders.
+        console.warn('get_user_stats unavailable on this contract:', statsErr?.message || statsErr);
+        setUserStats({
+          reputation: 0,
+          tier: 'Novice',
+          ban_expiry: 0,
+          claim_count: 0,
+          sbt_count: 0,
+          stake_discount: false,
+          _legacy: true,
+        });
+      }
+      try {
+        const sbtsStr = await readClient.readContract({
+          address: addr,
+          functionName: 'get_user_sbts',
+          args: [walletAddress],
+        });
+        const parsed = typeof sbtsStr === 'string' ? JSON.parse(sbtsStr) : sbtsStr;
+        setUserSbts(Array.isArray(parsed) ? parsed : []);
+      } catch (_) {
+        setUserSbts([]);
+      }
+    } finally {
+      if (!silent) setProfileLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshProfile(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletAddress, contractAddress]);
+
+  const TIER_COLORS = {
+    Novice: { fg: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
+    Verified: { fg: '#60a5fa', bg: 'rgba(96,165,250,0.15)' },
+    Trusted: { fg: '#a78bfa', bg: 'rgba(167,139,250,0.16)' },
+    Elder: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.16)' },
   };
 
   const handleSelectPreset = (key) => {
@@ -433,6 +502,7 @@ function App() {
       setSuccess(`Soulbound Boundary Proof NFT minted (2 GEN fee)!`);
       setProgress('');
       await fetchClaimDetails(claimId);
+      refreshProfile(true);
     } catch (e) {
       console.error(e);
       setError(`Failed to mint Soulbound NFT: ${e.message || e}`);
@@ -552,6 +622,25 @@ function App() {
             <span>Studio Net · {CHAIN_ID_HEX}</span>
           </div>
 
+          {walletAddress && userStats && (
+            <button
+              className="glass-pill"
+              onClick={() => setShowProfile((v) => !v)}
+              title={`Reputation ${userStats.reputation} · ${userStats.claim_count} claims · ${userStats.sbt_count} SBTs`}
+              style={{
+                cursor: 'pointer',
+                color: (TIER_COLORS[userStats.tier] || TIER_COLORS.Novice).fg,
+                background: (TIER_COLORS[userStats.tier] || TIER_COLORS.Novice).bg,
+                border: '1px solid currentColor',
+              }}
+            >
+              <Award size={14} />
+              <span>{userStats.tier} · rep {userStats.reputation}</span>
+              {userStats.sbt_count > 0 && (
+                <span style={{ opacity: 0.85 }}>· <ImageIcon size={12} style={{ verticalAlign: 'middle' }} /> {userStats.sbt_count}</span>
+              )}
+            </button>
+          )}
           {walletAddress ? (
             <div className="glass-pill">
               <Wallet size={14} />
@@ -602,6 +691,118 @@ function App() {
               pre-funded Studio account. Read-only views (get_claim, get_ruling) work without a wallet.
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Bundle B: profile panel — tier + reputation + SBT gallery */}
+      {walletAddress && showProfile && (
+        <div className="glass-card" style={{ textAlign: 'left', marginBottom: 20, border: '1px solid rgba(167,139,250,0.4)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <h3 style={{ margin: 0, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Award size={18} className="logo-icon" />
+              My GenSquat profile
+            </h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="copy-btn"
+                onClick={() => refreshProfile(false)}
+                title="Refresh profile from chain"
+                style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                {profileLoading ? <RotateCw className="spinner" size={12} /> : <RotateCw size={12} />}
+                <span style={{ fontSize: 12 }}>Refresh</span>
+              </button>
+              <button
+                className="copy-btn"
+                onClick={() => setShowProfile(false)}
+                title="Hide"
+                style={{ padding: '6px 10px' }}
+              >
+                <span style={{ fontSize: 12 }}>Hide</span>
+              </button>
+            </div>
+          </div>
+
+          {userStats ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 16 }}>
+              <div className="summary-card">
+                <div className="summary-label">Tier</div>
+                <div className="summary-value" style={{ color: (TIER_COLORS[userStats.tier] || TIER_COLORS.Novice).fg }}>
+                  {userStats.tier}
+                </div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">Reputation</div>
+                <div className="summary-value">{userStats.reputation}</div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">Claims filed</div>
+                <div className="summary-value">{userStats.claim_count}</div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">SBTs minted</div>
+                <div className="summary-value" style={{ color: 'var(--color-purple)' }}>{userStats.sbt_count}</div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">Stake discount</div>
+                <div className="summary-value" style={{ color: userStats.stake_discount ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+                  {userStats.stake_discount ? '−20% (4 GEN)' : 'none (5 GEN)'}
+                </div>
+              </div>
+              {userStats.ban_expiry > Math.floor(Date.now() / 1000) && (
+                <div className="summary-card" style={{ borderColor: 'var(--color-danger)' }}>
+                  <div className="summary-label">Ban until</div>
+                  <div className="summary-value" style={{ color: 'var(--color-danger)' }}>
+                    {new Date(userStats.ban_expiry * 1000).toLocaleDateString()}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Loading profile…</p>
+          )}
+
+          <h4 style={{ margin: '8px 0 10px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-text-muted)' }}>
+            <ImageIcon size={14} />
+            Soulbound Boundary SBTs
+          </h4>
+          {userSbts.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
+              No SBTs minted yet. After analyze_claim finalizes with confidence ≥ 0.8, use "Mint Boundary SBT" on that claim.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+              {userSbts.map((item) => (
+                <div key={item.claim_id} className="nft-card">
+                  <div className="nft-header">
+                    <span className="nft-title">{item.metadata?.token_id || `sbt_${item.claim_id}`}</span>
+                    <span className="nft-badge" style={{
+                      background: item.metadata?.source === 'dispute_ruling' ? 'rgba(167,139,250,0.2)' : 'rgba(59,130,246,0.2)',
+                    }}>
+                      {item.metadata?.source === 'dispute_ruling' ? 'FINAL' : 'ORIGINAL'}
+                    </span>
+                  </div>
+                  <div className="nft-field">Claim</div>
+                  <div className="nft-value">{item.claim_id}</div>
+                  <div className="nft-field">Confidence</div>
+                  <div className="nft-value">{Math.round(Number(item.metadata?.confidence || 0) * 100)}%</div>
+                  <div className="nft-field">Encroachment</div>
+                  <div className="nft-value" style={{ color: item.metadata?.encroachment_detected ? 'var(--color-danger)' : 'var(--color-success)' }}>
+                    {item.metadata?.encroachment_detected ? 'DETECTED' : 'CLEAN'}
+                  </div>
+                  <div className="nft-field">Ruling hash</div>
+                  <div className="nft-value" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' }}>
+                    {(item.metadata?.ruling_hash || '').slice(0, 24)}…{(item.metadata?.ruling_hash || '').slice(-8)}
+                  </div>
+                  {item.land_evidence_url && (
+                    <a href={item.land_evidence_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--color-primary)', wordBreak: 'break-all' }}>
+                      View land evidence page ↗
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

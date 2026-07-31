@@ -53,10 +53,41 @@ If a challenger disputes a claim and the democratic arbitration **upholds** the 
 
 ## Reputation Index Model
 
-User reputation starts at a base score of `100` and is updated dynamically on-chain in the Core contract:
+User reputation starts at `0` and moves in small integer steps around the
+dispute lifecycle. Values are stored in `user_reputation:
+TreeMap[Address, i256]` on the core contract and read/queried via
+`get_user_stats(user)`.
 
-1. **Successful Claim Verification:** $+10$ points (capped at `200`).
-2. **Failed Claim Submission (low confidence):** $-15$ points.
-3. **Successful Dispute (Overturned Appeal):** $+25$ points.
-4. **Frivolous Dispute (Uphold Ruling):** $-30$ points.
-5. **Malicious Blacklisting:** If a user's reputation drops below `40`, they are banned from submitting new claims for `30 days` (represented by `user_ban_expiry` in the contract).
+| Event | Δ challenger | Δ claim owner |
+|---|---|---|
+| Claim upheld (dispute rejected) | −2 | +1 |
+| Claim overturned (dispute succeeds) | +2 | −2 |
+| Owner reputation falls below −3 | — | banned from `submit_claim` for 30 days (`user_ban_expiry`) |
+
+Design goals:
+
+- Small integer deltas keep griefing bounded; a single wrong dispute
+  costs 2 reputation, not 30.
+- The ban trigger requires *repeated* overturned rulings, so a single
+  bad-faith dispute against an honest owner does not brick them.
+
+## Tier system (Bundle B / v0.6.0)
+
+`get_user_stats(user)` maps reputation to a tier used by the frontend
+badge + the stake-discount gate on `submit_claim`:
+
+| Tier | Reputation range | `stake_discount` | `submit_claim` cost |
+|---|---|---|---|
+| **Novice** | rep < 5 | ❌ | 5 GEN |
+| **Verified** | 5 ≤ rep < 10 | ✅ | 4 GEN (−20%) |
+| **Trusted** | 10 ≤ rep < 20 | ✅ | 4 GEN (−20%) |
+| **Elder** | rep ≥ 20 | ✅ | 4 GEN (−20%) |
+
+The stake discount is a single step at rep ≥ 5; higher tiers reserve
+room for future perks (e.g. faster arbitration, larger polygon cap,
+priority queue). They currently only differ in the frontend badge and
+give reviewers a legible progression to observe.
+
+Ban stays orthogonal to tier: even an Elder gets banned if their
+reputation drops below −3, and the ban survives a subsequent recovery
+to a higher tier until the 30-day window expires.

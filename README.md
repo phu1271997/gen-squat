@@ -25,11 +25,12 @@ submit_claim (+5 GEN, polygon + land_evidence_url)
 
 | Method | Kind | Value |
 |---|---|---|
-| `submit_claim(polygon_json, year_start, year_end, description, land_evidence_url)` | write payable | **5 GEN** |
+| `submit_claim(polygon_json, year_start, year_end, description, land_evidence_url)` | write payable | **5 GEN** (4 GEN for rep ≥ 5) |
 | `analyze_claim(claim_id)` | write | 0 |
 | `dispute_claim(claim_id, challenge_reason)` | write payable | **10 GEN** |
 | `mint_boundary_nft(claim_id)` | write payable | **2 GEN** |
 | `get_claim` / `get_ruling` / `get_claim_count` / `get_boundary_nft` | view | — |
+| `get_user_stats(user)` / `get_user_sbts(user)` | view | — |
 
 Standalone Studio mode: leave treasury/nft addresses at zero. Optional multi-contract in `contracts/gen_squat_treasury.py` + `gen_squat_nft.py` via `set_dependencies`.
 
@@ -71,9 +72,31 @@ wallet.
 
 Handoff: [`ANTIGRAVITY_PROMPT.md`](ANTIGRAVITY_PROMPT.md)
 
+## What's new · v0.6.0
+
+- **AI Enhancement + Security Hardening** — prompt-injection defense
+  (input sanitizer + XML-boundary tagging + output canary + validator
+  agreement on `injection_detected`), multi-perspective consensus
+  (Forensic / Legal / Skeptic), mint guard against injection-flagged
+  rulings. See [`docs/ADR-004-prompt-injection-defense.md`](docs/ADR-004-prompt-injection-defense.md).
+- **Reputation Tier + SBT Gallery** — `get_user_stats` /
+  `get_user_sbts` views, header tier badge (Novice / Verified /
+  Trusted / Elder), collapsible profile panel with live SBT gallery.
+- 33 pytest tests, all green (`gltest tests/`).
+
+Full history in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Docs
 
-- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) — judge path  
-- [`docs/SAMPLES.md`](docs/SAMPLES.md) — scenario notes  
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)  
-- [`docs/ECONOMICS.md`](docs/ECONOMICS.md)  
+- [`CHANGELOG.md`](CHANGELOG.md) — semver history
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev + review conventions
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) — judge path
+- [`docs/SAMPLES.md`](docs/SAMPLES.md) — scenario notes
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module + sequence diagrams
+- [`docs/ECONOMICS.md`](docs/ECONOMICS.md) — stakes + reputation tiers
+- [`docs/SECURITY.md`](docs/SECURITY.md) — threat model + mitigations
+- [`docs/ADR-001-optimistic-democracy.md`](docs/ADR-001-optimistic-democracy.md) — consensus API choice
+- [`docs/ADR-002-standalone-vs-multi-contract.md`](docs/ADR-002-standalone-vs-multi-contract.md) — dual-mode design
+- [`docs/ADR-003-metamask-only-signing.md`](docs/ADR-003-metamask-only-signing.md) — signing model
+- [`docs/ADR-004-prompt-injection-defense.md`](docs/ADR-004-prompt-injection-defense.md) — layered defense
+- [`docs/02-common-errors.md`](docs/02-common-errors.md) — repo-local pitfalls reference
